@@ -1506,6 +1506,17 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
   /** The version of Spark on which this application is running. */
   def version: String = SPARK_VERSION
 
+  def getBlockManagerMasterURL: String = 
+    env.blockManager.master.driverEndpoint.address.toSparkURL
+
+  /**
+   * Connect to a remote BlockManagerMaster and start sharing RDD data
+   */
+  def addRemoteBlockManagerMaster(url: String){
+    val (host, port) = Utils.extractHostPortFromSparkUrl(url)
+    env.blockManager.master.addRemoteBlockManagerMaster(host, port)
+  }
+
   /**
    * Return a map from the slave to the max memory available for caching and the remaining
    * memory available for caching.
@@ -2106,6 +2117,12 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
 
   /** Register a new RDD, returning its RDD ID */
   private[spark] def newRddId(): Int = nextRddId.getAndIncrement()
+
+  private[spark] def newRddId(rdd: RDD[_]): Int = {
+    val id = nextRddId.getAndIncrement()
+    allRdds(id) = rdd
+    id
+  }
 
   /**
    * Registers listeners specified in spark.extraListeners, then starts the listener bus.

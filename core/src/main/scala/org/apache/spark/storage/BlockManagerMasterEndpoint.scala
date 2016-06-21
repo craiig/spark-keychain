@@ -19,16 +19,18 @@ package org.apache.spark.storage
 
 import java.util.{HashMap => JHashMap}
 
+import scala.util.{Failure, Success}
 import scala.collection.mutable
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
 
-import org.apache.spark.rpc.{RpcEndpointRef, RpcEnv, RpcCallContext, ThreadSafeRpcEndpoint}
+import org.apache.spark.rpc.{RpcEndpointRef, RpcEnv, RpcCallContext, ThreadSafeRpcEndpoint, RpcAddress}
 import org.apache.spark.{Logging, SparkConf}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.scheduler._
 import org.apache.spark.storage.BlockManagerMessages._
 import org.apache.spark.util.{ThreadUtils, Utils}
+import org.apache.spark.SparkEnv
 
 /**
  * BlockManagerMasterEndpoint is an [[ThreadSafeRpcEndpoint]] on the master node to track statuses
@@ -54,10 +56,66 @@ class BlockManagerMasterEndpoint(
   private val askThreadPool = ThreadUtils.newDaemonCachedThreadPool("block-manager-ask-thread-pool")
   private implicit val askExecutionContext = ExecutionContext.fromExecutorService(askThreadPool)
 
+  // Mapping of remote block master managers and their respective endpoints
+  private val remoteBlockManagerMasters = new mutable.HashMap
+    [String, RpcEndpointRef]
+
+  def addRemoteBlockManagerMaster(host: String, port: Int){
+    Utils.checkHost(host, "Expected hostname")
+    //rpcEnv.setupEndpointRef(SparkEnv.driverActorSystemName, 
+      //RpcAddress(host, port))
+    val driverUrl = rpcEnv.uriOf(SparkEnv.driverActorSystemName,
+      RpcAddress(host, port), BlockManagerMaster.DRIVER_ENDPOINT_NAME)
+
+    rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
+      // This is a very fast action so we can use "ThreadUtils.sameThread"
+      //driver = Some(ref) //hoping that we set endpoints via register response
+      ref.ask[RegisterRemoteBlockManagerMasterResponse](
+        RegisterRemoteBlockManagerMaster(self))
+    }(ThreadUtils.sameThread).onComplete {
+      // This is a very fast action so we can use "ThreadUtils.sameThread"
+      case Success(msg) => Utils.tryLogNonFatalError {
+        Option(self).foreach(_.send(msg)) // msg must be RegisteredRemoteBlockManagerMaster
+      }
+      case Failure(e) => {
+        logError(s"Cannot register with driver: $driverUrl", e)
+        //System.exit(1)
+      }
+    }(ThreadUtils.sameThread)
+  }
+
+  def deregisterFromRemoteBlockManagerMasters(){
+    //tell all the remote BMMs that we're unavailablAe
+    for((_,rbmm) <- remoteBlockManagerMasters) {
+      rbmm.send( DeregisterRemoteBlockManagerMaster(self) )
+    }
+  }
+
+  override def receive: PartialFunction[Any, Unit] = {
+    case RegisteredRemoteBlockManagerMaster(remoteBlockManagerMasterRef) => 
+      logInfo(s"Successfully registered $remoteBlockManagerMasterRef")
+      remoteBlockManagerMasters.put(remoteBlockManagerMasterRef.address.toString,
+        remoteBlockManagerMasterRef)
+    case DeregisterRemoteBlockManagerMaster(remoteBlockManagerMasterRef) =>
+      logInfo(s"Deregistering remote BlockManagerMaster $remoteBlockManagerMasterRef")
+      remoteBlockManagerMasters.remove(
+        remoteBlockManagerMasterRef.address.toString)
+  }
+
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterBlockManager(blockManagerId, maxMemSize, slaveEndpoint) =>
       register(blockManagerId, maxMemSize, slaveEndpoint)
       context.reply(true)
+
+    case AddRemoteBlockManagerMaster(host, port) =>
+      addRemoteBlockManagerMaster(host, port)
+      context.reply(true)
+
+    case RegisterRemoteBlockManagerMaster(remoteBlockManagerMasterRef) =>
+      logInfo(s"Registered remote black manager master $remoteBlockManagerMasterRef")
+      remoteBlockManagerMasters.put(remoteBlockManagerMasterRef.address.toString,
+        remoteBlockManagerMasterRef)
+      context.reply(RegisteredRemoteBlockManagerMaster(self))
 
     case _updateBlockInfo @ UpdateBlockInfo(
       blockManagerId, blockId, storageLevel, deserializedSize, size, externalBlockStoreSize) =>
@@ -107,6 +165,7 @@ class BlockManagerMasterEndpoint(
       context.reply(true)
 
     case StopBlockManagerMaster =>
+      deregisterFromRemoteBlockManagerMasters()
       context.reply(true)
       stop()
 

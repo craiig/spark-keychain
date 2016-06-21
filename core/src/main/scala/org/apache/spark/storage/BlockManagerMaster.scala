@@ -57,6 +57,13 @@ class BlockManagerMaster(
     logInfo("Registered BlockManager")
   }
 
+  /** Add a new remote BlockManagerMaster to this master */
+  def addRemoteBlockManagerMaster(host: String, port: Int){
+    logInfo("Trying to add remote BlockManagerMaster")
+    tell(AddRemoteBlockManagerMaster(host, port))
+    logInfo("Added remote BlockManagerMaster")
+  }
+
   def updateBlockInfo(
       blockManagerId: BlockManagerId,
       blockId: BlockId,

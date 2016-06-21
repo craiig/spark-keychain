@@ -24,6 +24,25 @@ import org.apache.spark.util.Utils
 
 private[spark] object BlockManagerMessages {
   //////////////////////////////////////////////////////////////////////////////////
+  // Messages from the master to other masters
+  //////////////////////////////////////////////////////////////////////////////////
+  sealed trait ToRemoteBlockManagerMaster
+
+  sealed trait RegisterRemoteBlockManagerMasterResponse;
+
+  case class RegisterRemoteBlockManagerMaster(
+    remoteBlockManagerMasterRef: RpcEndpointRef)
+  extends ToRemoteBlockManagerMaster with RegisterRemoteBlockManagerMasterResponse
+
+  case class RegisteredRemoteBlockManagerMaster(
+    remoteBlockManagerMasterRef: RpcEndpointRef)
+  extends ToRemoteBlockManagerMaster with RegisterRemoteBlockManagerMasterResponse
+
+  case class DeregisterRemoteBlockManagerMaster(
+    remoteBlockManagerMasterRef: RpcEndpointRef)
+  extends ToRemoteBlockManagerMaster
+
+  //////////////////////////////////////////////////////////////////////////////////
   // Messages from the master to slaves.
   //////////////////////////////////////////////////////////////////////////////////
   sealed trait ToBlockManagerSlave
@@ -56,6 +75,11 @@ private[spark] object BlockManagerMessages {
       blockManagerId: BlockManagerId,
       maxMemSize: Long,
       sender: RpcEndpointRef)
+    extends ToBlockManagerMaster
+
+  case class AddRemoteBlockManagerMaster(
+      host: String,
+      port: Int)
     extends ToBlockManagerMaster
 
   case class UpdateBlockInfo(
