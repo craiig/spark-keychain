@@ -26,6 +26,7 @@ import org.apache.spark.util.Utils
 
 private[spark]
 class CartesianPartition(
+    val rdd: RDD[_],
     idx: Int,
     @transient private val rdd1: RDD[_],
     @transient private val rdd2: RDD[_],
@@ -60,7 +61,7 @@ class CartesianRDD[T: ClassTag, U: ClassTag](
     val array = new Array[Partition](rdd1.partitions.length * rdd2.partitions.length)
     for (s1 <- rdd1.partitions; s2 <- rdd2.partitions) {
       val idx = s1.index * numPartitionsInRdd2 + s2.index
-      array(idx) = new CartesianPartition(idx, rdd1, rdd2, s1.index, s2.index)
+      array(idx) = new CartesianPartition(this, idx, rdd1, rdd2, s1.index, s2.index)
     }
     array
   }

@@ -37,6 +37,13 @@ trait RandomDataGenerator[T] extends Pseudorandom with Serializable {
   def nextValue(): T
 
   /**
+   * Returns a string describing the input parameters, used for calculating an HLS
+   * including seed in the HLS is not neccessary because it included by the partition
+   */
+  @Since("1.6.1")
+  def getHLS(): String
+
+  /**
    * Returns a copy of the RandomDataGenerator with a new instance of the rng object used in the
    * class when applicable for non-locking concurrent usage.
    */
@@ -58,6 +65,10 @@ class UniformGenerator extends RandomDataGenerator[Double] {
   @Since("1.1.0")
   override def nextValue(): Double = {
     random.nextDouble()
+  }
+
+  override def getHLS(): String = {
+    return ""
   }
 
   @Since("1.1.0")
@@ -83,6 +94,10 @@ class StandardNormalGenerator extends RandomDataGenerator[Double] {
       random.nextGaussian()
   }
 
+  override def getHLS(): String = {
+    return ""
+  }
+
   @Since("1.1.0")
   override def setSeed(seed: Long): Unit = random.setSeed(seed)
 
@@ -105,6 +120,10 @@ class PoissonGenerator @Since("1.1.0") (
 
   @Since("1.1.0")
   override def nextValue(): Double = rng.sample()
+
+  override def getHLS(): String = {
+    return s"mean=${mean}"
+  }
 
   @Since("1.1.0")
   override def setSeed(seed: Long) {
@@ -130,6 +149,10 @@ class ExponentialGenerator @Since("1.3.0") (
 
   @Since("1.3.0")
   override def nextValue(): Double = rng.sample()
+
+  override def getHLS(): String = {
+    return s"mean=${mean}"
+  }
 
   @Since("1.3.0")
   override def setSeed(seed: Long) {
@@ -157,6 +180,10 @@ class GammaGenerator @Since("1.3.0") (
 
   @Since("1.3.0")
   override def nextValue(): Double = rng.sample()
+
+  override def getHLS(): String = {
+    return s"shape=${shape}_scale=${scale}"
+  }
 
   @Since("1.3.0")
   override def setSeed(seed: Long) {
@@ -186,6 +213,10 @@ class LogNormalGenerator @Since("1.3.0") (
   @Since("1.3.0")
   override def nextValue(): Double = rng.sample()
 
+  override def getHLS(): String = {
+    return s"mean=${mean}_std=${std}"
+  }
+
   @Since("1.3.0")
   override def setSeed(seed: Long) {
     rng.reseedRandomGenerator(seed)
@@ -211,6 +242,10 @@ class WeibullGenerator(
   private val rng = new WeibullDistribution(alpha, beta)
 
   override def nextValue(): Double = rng.sample()
+
+  override def getHLS(): String = {
+    return s"alpha=${alpha}_beta=${beta}"
+  }
 
   override def setSeed(seed: Long): Unit = {
     rng.reseedRandomGenerator(seed)

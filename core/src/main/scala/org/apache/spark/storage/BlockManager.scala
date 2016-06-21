@@ -700,6 +700,7 @@ private[spark] class BlockManager(
       logInfo(s"Found block $blockId remotely")
       return remote
     }
+    logInfo(s"Did not find block $blockId remotely or locally")
     None
   }
 
@@ -750,12 +751,14 @@ private[spark] class BlockManager(
       makeIterator: () => Iterator[T]): Either[BlockResult, Iterator[T]] = {
     // Attempt to read the block from local or remote storage. If it's present, then we don't need
     // to go through the local-get-or-put path.
+    logInfo(s"Looking for partition $blockId")
     get[T](blockId)(classTag) match {
       case Some(block) =>
         return Left(block)
       case _ =>
         // Need to compute the block.
     }
+    logInfo(s"Partition $blockId not found, computing it")
     // Initially we hold no locks on this block.
     doPutIterator(blockId, makeIterator, level, classTag, keepReadLock = true) match {
       case None =>

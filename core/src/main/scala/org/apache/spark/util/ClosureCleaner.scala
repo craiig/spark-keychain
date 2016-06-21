@@ -17,13 +17,27 @@
 
 package org.apache.spark.util
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectOutputStream, DataOutputStream}
+import java.io.{ObjectStreamClass}
+import sun.misc.Unsafe
+import java.lang.reflect.Modifier
+import java.lang.reflect.{Array => ReflectArray};
+import java.nio.ByteBuffer;
 
-import scala.collection.mutable.{Map, Set, Stack}
+import scala.collection.mutable.{Map, Set, SortedSet, Queue, Stack}
 import scala.language.existentials
+import scala.collection.JavaConverters._
 
-import org.apache.xbean.asm5.{ClassReader, ClassVisitor, MethodVisitor, Type}
-import org.apache.xbean.asm5.Opcodes._
+import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Type, Label, Handle}
+import org.objectweb.asm.tree.{ClassNode, MethodNode, InsnList, AbstractInsnNode}
+import org.objectweb.asm.util.{TraceMethodVisitor, Textifier}
+import org.objectweb.asm.Opcodes._
+
+//for function serialization & encoding
+import java.security.MessageDigest
+import java.util.regex.Pattern
+import org.apache.spark.SparkContext
+import org.apache.commons.codec.binary.Base64
 
 import org.apache.spark.{SparkEnv, SparkException}
 import org.apache.spark.internal.Logging
@@ -73,6 +87,23 @@ private[spark] object ClosureCleaner extends Logging {
     }
     (Nil, Nil)
   }
+  /* returns same as above but not filtered for outers only */
+  private def getAllClassesAndObjects(obj: AnyRef): (List[Class[_]], List[AnyRef]) = {
+    for (f <- obj.getClass.getDeclaredFields) {
+      f.setAccessible(true)
+      val outer = f.get(obj)
+      // The outer pointer may be null if we have cleaned this closure before
+      if (outer != null) {
+        if (isClosure(f.getType)) {
+          val recurRet = getAllClassesAndObjects(outer)
+          return (f.getType :: recurRet._1, outer :: recurRet._2)
+        } else {
+          return (f.getType :: Nil, outer :: Nil) // Stop at the first $outer that is not a closure
+        }
+      }
+    }
+    (Nil, Nil)
+  }
   /**
    * Return a list of classes that represent closures enclosed in the given closure object.
    */
@@ -89,6 +120,470 @@ private[spark] object ClosureCleaner extends Logging {
       }
     }
     (seen - obj.getClass).toList
+  }
+
+  /* returns a map of (class to (funcname, funcsig) ) of all functions called by the given class, recursively */
+  type Class2Func = (String,String,String)
+  private def getFunctionsCalled(obj: AnyRef): Set[Class2Func] = {
+    var cls = obj.getClass
+
+    val seen = SortedSet[Class2Func]()
+    getClassReader(obj.getClass).accept(new CalledFunctionsFinder(seen), 0)
+
+    var stack = SortedSet[Class2Func]()
+    getClassReader(obj.getClass).accept(new CalledFunctionsFinder(stack), 0)
+
+    while(!stack.isEmpty){
+      val tup = stack.head
+      stack = stack.tail
+      val clazz = Class.forName(tup._1.replace('/', '.'), false, Thread.currentThread.getContextClassLoader)
+      val cr = getClassReader(clazz)
+
+      val set = SortedSet[Class2Func]()
+      val sigtup = (tup._2, tup._3)
+      cr.accept(new CalledFunctionsFinder(set, Some(Set(sigtup))), 0)
+
+      for (newtups <- set -- seen){
+        seen += newtups
+        stack += newtups
+      }
+    }
+    logDebug(s"Found ${seen.size} functions called by ${obj.getClass.getName}")
+
+    seen
+  }
+
+  /* hash a class, optionally only the given functions,
+   * hashing the function using hashObj
+   * - if anonymizeClass is true, the hashing will ignore the 
+   * name of the function itself, which is useful for hashing
+   * closures from the scala REPL
+   * */
+  private def hashClass(obj: AnyRef,
+    hashObj: MessageDigest,
+    anonymizeClass:Boolean = false,
+    funcList: Set[(String,String)] = Set()
+    ): Unit  = {
+
+     /* build classnode */
+     val cn = new ClassNode()
+     //we might get passed a function of a class, or a class itself, so we disambiguate
+     val objcls:Class[_] = if (obj.isInstanceOf[Class[_]]){
+       obj.asInstanceOf[Class[_]]
+     } else {
+       obj.getClass
+     }
+     getClassReader(objcls).accept(cn, 0)
+
+     logDebug(s"Hashing Class")
+     logDebug(s"name: ${cn.name}")
+     logDebug(s"outerClass: ${cn.outerClass}")
+     logDebug(s"outerMethod: ${cn.outerMethod}")
+     logDebug(s"outerMethodDesc: ${cn.outerMethodDesc}")
+     logDebug(s"signature: ${cn.signature}")
+     logDebug(s"superName: ${cn.superName}")
+     
+     for( f <- objcls.getDeclaredFields ){
+       if (f.getName == "serialVersionUID"){
+         try {
+           logDebug(s"+ serialVersionUID: ${f.getLong(null)}")
+         } catch {
+           case e: Exception => logDebug("+ serialVersionUID: exception")
+         }
+       }
+     }
+
+
+     /* read class using a visitor we can override
+      * make sure to rewrite any non-identifying symbols that could cause
+      * differences in the hash but aren't functionally relevant, such as:
+      *  - Scala REPL adds 'lineXX' package for each lambda
+      * for now we only want to support very simple lambdas, so we only rewrite
+      * references to their current package to a non-REPL form, but keep any references
+      * to other potentially REPL functions, but we also want to avoid ambiguity
+      */
+
+     //create a regex that replaces the original name with the munged
+     val re_line = (s:String) => {
+       if(anonymizeClass){
+         val quoted_name = "\\$line\\d+".r
+         var ret = quoted_name.replaceAllIn(s, "\\$lineXX")
+         ret
+       } else {
+         s
+       }
+     }
+     val re_name = (s:String) => {
+       if(anonymizeClass && cn.name != null){
+         val quoted_name = Pattern.quote(cn.name).r
+         quoted_name.replaceAllIn(re_line(s), "THISCLASS")
+       } else {
+         s
+       }
+     }
+     val re_outer = (s:String) => {
+       if(anonymizeClass && cn.outerClass != null){
+         val quoted_outer = Pattern.quote(cn.outerClass).r
+         quoted_outer.replaceAllIn(re_line(s), "THISOUTER")
+       } else {
+         s
+       }
+     }
+
+     // A methodvisitor to rename strings in the bytecode output
+     val p = new Textifier(ASM5) {
+       override def visitLocalVariable(name:String, desc:String,
+         signature:String, start:Label, end:Label, index:Int){
+           var newdesc = re_outer(re_name(desc))
+           super.visitLocalVariable(name, newdesc, signature,
+             start, end, index)
+       }
+       /* deprecated by ASM5, kept here to ensure renaming works */
+      override def visitMethodInsn(opcode:Int, owner:String,
+        name:String, desc:String){
+          var newname = re_name(name)
+          var newowner = re_name(owner)
+          var newdesc = re_outer(re_name(desc))
+          super.visitMethodInsn(opcode, newowner, newname, newdesc);
+        }
+       override def visitMethodInsn(opcode:Int, owner:String,
+         name:String, desc:String, itf:Boolean){
+          var newname = re_name(name)
+          var newowner = re_name(owner)
+          var newdesc = re_outer(re_name(desc))
+
+          if(newowner.startsWith("$line")){
+            newname = """VAL\d+""".r.replaceAllIn(newname, "VALXX")
+          }
+
+          //call super to print method
+          super.visitMethodInsn(opcode, newowner, newname, newdesc, itf);
+       }
+       override def visitLineNumber(line:Int, start:Label){
+          //this is a no-op to suppress line number output
+       }
+       override def visitFieldInsn( opcode:Int, owner:String,
+         name:String, desc:String){
+           /* rename references to fields */
+           val newowner = re_name(owner)
+           val newdesc = re_name(desc)
+           var newname = re_name(name)
+           if (opcode == GETFIELD && owner.startsWith("$line")) {
+             newname = """VAL\d+""".r.replaceAllIn(newname, "VALXX")
+           }
+           super.visitFieldInsn(opcode, newowner, newname, newdesc)
+       }
+     }
+     val tm = new TraceMethodVisitor(p)
+
+     var bytecode_string = new StringBuilder
+
+     val methods = cn.methods.asInstanceOf[java.util.ArrayList[MethodNode]].asScala
+     val filter = funcList.size > 0
+     for(m:MethodNode <- methods){
+       //println(s"checking if ${(m.name,m.desc)} in ${funcList}: ${ funcList contains (m.name,m.desc) }");
+       if( !filter || (funcList contains (m.name,m.desc)) ){
+         val newdesc = re_outer(re_name(m.desc))
+         var newname = re_name(m.name)
+         if (newdesc.startsWith("()L$line")) {
+           newname = """VAL\d+""".r.replaceAllIn(newname, "VALXX")
+         }
+         var methodHeader = s"${newname} ${newdesc} ${m.signature}"
+
+         bytecode_string.append(methodHeader)
+         hashObj.update(methodHeader.getBytes)
+
+         m.accept(tm) //visit method
+
+         //read text from method visitor
+         for(o <- p.getText.asScala){
+           var s = o.toString()
+           bytecode_string.append(s)
+           hashObj.update(s.getBytes)
+         }
+         p.getText.clear
+       }
+     }
+
+    logTrace(s"HashClass Bytecode:\n$bytecode_string")
+  }
+
+  /* a different way of approaching serialization:
+   * use java reflection and sun.misc.unsafe to introspect the memory directly
+   * copy the serialization code and walk the objects ourselves
+   * this will only serialize non-transitive, non-static primitive values
+   */
+  def hashInputPrimitives(func: AnyRef,
+    dos: DataOutputStream,
+    visited:Set[Object] = Set[Object](),
+    clz:Class[_] = null
+  ):Unit = {
+    /* get unsafe handle */
+    //var unsafe = Unsafe.getUnsafe();
+    val field = classOf[Unsafe].getDeclaredField("theUnsafe");
+    field.setAccessible(true);
+    val unsafe = field.get(null).asInstanceOf[Unsafe];
+    
+    //avoid loops
+    if(visited contains func){
+      logTrace(s"returning early, ${func} already visited");
+      return;
+    }
+    visited += func;
+
+    val toVisit = Queue[AnyRef]() //Queue is ordered?
+
+    var cl = clz;
+    if(cl == null){
+      cl = func.getClass()
+    }
+    logTrace(s"hashInputPrimitives: class: ${cl.getName}")
+    for( f <- cl.getDeclaredFields ){
+      f.setAccessible(true)
+      val transient = Modifier.isTransient(f.getModifiers)
+      val static = Modifier.isStatic(f.getModifiers)
+      val fldtype = f.getType()
+      val primitive = fldtype.isPrimitive()
+
+      logTrace(s"hashInputPrimitives:\tfield ${f.getName} type: ${fldtype.getName}")
+      logTrace(s"hashInputPrimitives:\t\tstatic: ${static} primitive: ${primitive} type: ${fldtype.getName} transient: ${transient}")
+
+      val writeBytes = (output:DataOutputStream, thing:AnyRef, offset:Long, size:Integer) => {
+        for(i <- 0 until size){
+             output.writeByte( unsafe.getByte(thing.asInstanceOf[Object], offset+i) )
+             logTrace(s"hashInputPrimitives:\t\twriteBytes up to: ${output.size}")
+        }
+      }
+
+      if( !( static || transient ) ){
+        val offset = unsafe.objectFieldOffset( f )
+        //if primitive, grab value
+        if(primitive && !fldtype.isArray()){
+          logTrace(s"hashInputPrimitives:\t\tadding to hash (primitive)")
+          if( fldtype == classOf[Byte] ){
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 1)
+          } else if( fldtype == classOf[Char] ){
+            //dos.writeChar( unsafe.getChar(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 2)
+          } else if( fldtype == classOf[Int] ){
+            //dos.writeInt( unsafe.getInt(func.asInstanceOf[Object], offset) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset+1) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset+2) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset+3) )
+            writeBytes(dos, func, offset, 4)
+          } else if( fldtype == classOf[Long] ){
+            //dos.writeLong( unsafe.getLong(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 8)
+          } else if( fldtype == classOf[Float] ){
+            //dos.writeFloat( unsafe.getFloat(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 4)
+          } else if( fldtype == classOf[Double] ){
+            //dos.writeDouble( unsafe.getDouble(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 8)
+          } else if( fldtype == classOf[Boolean] ){
+            //dos.writeBoolean( unsafe.getBoolean(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 1)
+          } else {
+            logError("hashInputPrimitives: Error could not determine primitive type")
+          }
+        }
+        else if(fldtype.isArray()){
+          val Value:Array[_] = f.get(func).asInstanceOf[Array[_]]
+          if(Value != null){
+            val length = ReflectArray.getLength(Value)
+            val baseOffset = unsafe.arrayBaseOffset( fldtype );
+            val indexScale = unsafe.arrayIndexScale( fldtype );
+            logTrace(s"hashInputPrimitives:\tfield is array, value:${Value.mkString(",")} length: ${length} baseOffset: ${baseOffset} indexScale: ${indexScale}");
+            logTrace(s"hashInputPrimitives:\t\tadding to hash (array)")
+
+            // if this is an array of objects (not primitives),
+            // make sure we visit each one
+            if(Value.isInstanceOf[Array[Object]]){
+              logTrace(s"hashInputPrimitives:\t\twriting objects")
+              for(p <- Value.asInstanceOf[Array[Object]]){
+                if(p != null){
+                  toVisit += p
+                }
+              }
+            } else {
+              logTrace(s"hashInputPrimitives:\t\twriting raw bytes")
+              //primitive arrays get visited directly??
+              //read the bytes of the array so that we don't have to infer type
+              // this has a problem in that reading bytes gives different byte ordering
+              // than reading int, double, etc, due to endianness
+              //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
+              for(i <- 0 to (indexScale*length-1) ){
+                //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
+                dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+              }
+            }
+          }
+        } else {
+          //if not primitive, recurse into and find it's primitives
+          // we don't care about the value of the reference really
+          // or the type, as this is encoded in the bytecode hash! :D
+          val p = f.get(func)
+          if(p != null){
+            logTrace(s"hashInputPrimitives:\t\tadding to visit list")
+            toVisit += p
+            logTrace(s"visit list: ${toVisit.mkString(",")}")
+            //hashInputPrimitives(p, dos, visited)
+            //logTrace(s"hashInputPrimitives: class: ${cl.getName}")
+          }
+        }
+      }
+    }
+
+    for( p <- toVisit ){
+      logTrace(s"visiting ${p}")
+      hashInputPrimitives(p, dos, visited)
+    }
+
+    //TODO support externalizable objects?
+
+    //follow the parent class desc
+    if( cl.getSuperclass() != null ){
+      hashInputPrimitives(func, dos, visited, cl.getSuperclass() )
+    }
+  }
+
+  /* serialize the entire function to bytes, and fix/blank out
+   * any fields that we don't need, then return the bytes for hashing
+   * we just serialize the top-level class which should capture everything
+   * required */
+  def hashSerialization(func:AnyRef): Array[Byte] = {
+    var serialize_func = (f:AnyRef) => {
+      val bos = new ByteArrayOutputStream()
+      val out = new ObjectOutputStream(bos)
+      out.writeObject(func)
+      out.close()
+      //logTrace(s"serializationHash: unmangled serialized func byte array:\n${bos.toByteArray.mkString(",")}")
+      new String(bos.toByteArray, "ISO-8859-1") //iso 8859-1 is 1-1 character to byte
+    }
+    /* fix up the serialization to avoid some non-determinism from the REPL */
+    val re_serialized = (s:String) => {
+     /* serialversionUID */
+     // python re.sub(r'sr..lineXX.\$read(\$\$iwC)*........\x02', 'sr\x00\x09.REPLCLASS\x02', s)
+     val all_res = "res\\d+".r.replaceAllIn(s, "resXX")
+     val all_vals = "VAL\\d+".r.replaceAllIn(all_res, "valXX")
+     val lineXX = "\\$line\\d+".r.replaceAllIn(all_vals, "lineXX")
+     /* replace the serialversion ID with a dummy value
+      * (?s) needed to get the dot matching newlines, etc.
+      * */
+     val replclass = "(?s)sr..lineXX.\\$read(\\$\\$iwC)*........\\x02\\x00".r.replaceAllIn(lineXX, "sr..REPLCLASS\\x02\\x00")
+
+     /* replace the RDD ID with a dummy value
+      * lots of context is included here, up to the start of the RDD id serialization, so we're sure we got it right
+      * as time goes on we may need to refine this so that we don't miss a case
+      * we need to mask the rddid off, because all parents have a numerical rdd, even if they also have RDDUnique
+      * */
+     val rddid = "r\\x00\\x18org.apache.spark.rdd.RDD........\\x02\\x00\\x05I\\x00\\x02idL\\x00\\x0echeckpointDatat\\x00\\x0eLscala/Option;L\\x00'org\\$apache\\$spark\\$rdd\\$RDD\\$\\$dependencies_t\\x00\\x16Lscala/collection/Seq;L\\x00\\$org\\$apache\\$spark\\$rdd\\$RDD\\$\\$evidence\\$1q\\x00~\\x00.L\\x00\\x0cstorageLevelt\\x00'Lorg/apache/spark/storage/StorageLevel;xp....s"
+     .r.replaceAllIn(replclass, "RDDIDMASK")
+     rddid
+    }
+
+    //testing that serialization is deterministic
+    val serial1 = re_serialized(serialize_func(func));
+    //logTrace(s"serializationHash: mangled serialized func byte array:\n${serial1.getBytes("ISO-8859-1").mkString(",")}")
+    serial1.getBytes("ISO-8859-1")
+  }
+
+  /** Hash the given closure.
+   * This hashes only the functional pieces of the closure
+   *  - function signature
+   *  - instructions
+   * so that it's functionality can be summarized as a hash, used for comparison between different
+   * spark contexts that may be in use
+   */
+  var hashCache: Map[String, Array[Byte]] = Map.empty
+  def hash(func: AnyRef): Option[String] = {
+    var hashStart = System.currentTimeMillis
+
+    if (!isClosure(func.getClass)) {
+      logInfo("Expected a closure; got " + func.getClass.getName)
+      return None
+    }
+    if (func == null) {
+      return None
+    }
+    logDebug(s"+++ Hashing closure $func (${func.getClass.getName}) +++")
+
+    /* first check to see if we've already hash the given ref */
+    var hashbytes:Array[Byte] = hashCache get func.getClass.getName match {
+      case Some(result) => {
+        logInfo("Hash Cache hit for: " + func.getClass.getName)
+        result
+      }
+      case None => {
+          logInfo("Hash Cache miss for: " + func.getClass.getName)
+          var classesToVisit = getFunctionsCalled(func)
+          logDebug(s"+++ All classes to visit: $classesToVisit")
+          /* hash the given function */
+          var hash = MessageDigest.getInstance("SHA-256")
+
+          hashClass(func, hash, true)  //true = anonymize function
+
+          /* hash the bytecode of all functions that this function calls */
+          /* todo rewrite this so we only call it once per class */
+          for( cls <- classesToVisit ){
+            var clzname = cls._1.replace('/', '.')
+            var obj = Class.forName( clzname,
+            false, Thread.currentThread.getContextClassLoader)
+            logDebug(s"+++ hashing $clzname functions: ${ (cls._2, cls._3) }")
+            hashClass(obj, hash, true, Set((cls._2, cls._3)) )
+          }
+          val digest = hash.digest
+          hashCache(func.getClass.getName) = digest
+          digest
+      }
+    }
+    var hashBytecodeStop = System.currentTimeMillis
+
+    // Now we want to serialize & hash any referenced fields
+    /* disable serialization hashing for now */
+    /* 
+    val serializationBytes = hashSerialization(func);
+    var serial_hash = MessageDigest.getInstance("SHA-256")
+    serial_hash.update(serializationBytes)
+    var serial_hash64 = Base64.encodeBase64URLSafeString(serial_hash.digest)
+    logInfo(s"Serialization hash: $serial_hash64")
+    */
+
+    //hash the primitives
+    var hashPrimitivesStart = System.currentTimeMillis
+    val bos = new ByteArrayOutputStream()
+    val dos = new DataOutputStream(bos)
+    logTrace("Hash input primitives start for: " + func.getClass.getName)
+    hashInputPrimitives( func, dos )
+    dos.close()
+    logTrace(s"Primitive Bytes: ${ bos.toByteArray.mkString(",") } ")
+
+    var primitive_hash64 = if( bos.toByteArray.length > 0){
+      var primitiveHash = MessageDigest.getInstance("SHA-256")
+      primitiveHash.update(bos.toByteArray)
+      Base64.encodeBase64URLSafeString(primitiveHash.digest)
+    } else {
+      "none"
+    }
+    logInfo(s"Primitive hash: $primitive_hash64")
+
+    //finalize the hash
+    var hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
+    logInfo(s"Bytecode hash: $hashbytesenc")
+    //Some(hashbytesenc)
+
+    //merge bytecode and primitive hash
+    var merged = s"bc:${hashbytesenc}_pr:${primitive_hash64}"
+    logInfo(s"Merged hash: ${merged}")
+
+    var hashStop = System.currentTimeMillis
+    logInfo(s"Hashing took: ${hashStop - hashStart} ms closure:${func.getClass.getName}")
+    logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ms closure:${func.getClass.getName}")
+    logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ms closure:${func.getClass.getName}")
+
+    Some(merged)
   }
 
   /**
@@ -402,6 +897,65 @@ private[util] class FieldAccessFinder(
     }
   }
 }
+private[util] class RecursiveFieldAccessFinder(
+    fields: Map[Class[_], Set[String]],
+    findTransitively: Boolean,
+    specificMethod: Option[MethodIdentifier[_]] = None,
+    visitedMethods: Set[MethodIdentifier[_]] = Set.empty)
+  extends ClassVisitor(ASM5) {
+
+  override def visitMethod(
+      access: Int,
+      name: String,
+      desc: String,
+      sig: String,
+      exceptions: Array[String]): MethodVisitor = {
+
+    // If we are told to visit only a certain method and this is not the one, ignore it
+    if (specificMethod.isDefined &&
+        (specificMethod.get.name != name || specificMethod.get.desc != desc)) {
+      return null
+    }
+
+    new MethodVisitor(ASM5) {
+      override def visitFieldInsn(op: Int, owner: String, name: String, desc: String) {
+        if (op == GETFIELD) {
+          var cl = Class.forName(owner.replace('/', '.'),
+            false,
+            Thread.currentThread.getContextClassLoader)
+          if( ! (fields contains cl) ) fields(cl) = Set[String]()
+          fields(cl) += name
+        }
+      }
+
+      override def visitMethodInsn(op: Int, owner: String, name: String, desc: String, itf: Boolean) {
+        var cl = Class.forName(owner.replace('/', '.'),
+          false,
+          Thread.currentThread.getContextClassLoader)
+        println(s"visitMethodInsn: $owner")
+        return
+        //for (cl <- fields.keys if cl.getName == owner.replace('/', '.')) {
+          // Check for calls a getter method for a variable in an interpreter wrapper object.
+          // This means that the corresponding field will be accessed, so we should save it.
+          if (op == INVOKEVIRTUAL && owner.endsWith("$iwC") && !name.endsWith("$outer")) {
+            if( ! (fields contains cl) ) fields(cl) = Set[String]()
+            fields(cl) += name
+          }
+          // Optionally visit other methods to find fields that are transitively referenced
+          if (findTransitively) {
+            val m = MethodIdentifier(cl, name, desc)
+            if (!visitedMethods.contains(m)) {
+              // Keep track of visited methods to avoid potential infinite cycles
+              visitedMethods += m
+              ClosureCleaner.getClassReader(cl).accept(
+                new RecursiveFieldAccessFinder(fields, findTransitively, Some(m), visitedMethods), 0)
+            }
+          }
+        //}
+      }
+    }
+  }
+}
 
 private class InnerClosureFinder(output: Set[Class[_]]) extends ClassVisitor(ASM5) {
   var myName: String = null
@@ -434,5 +988,41 @@ private class InnerClosureFinder(output: Set[Class[_]]) extends ClassVisitor(ASM
         }
       }
     }
+  }
+}
+
+/* Finds all functions called from the given class, returning a list */
+private class CalledFunctionsFinder(
+    output: Set[(String,String,String)],
+    funcsToRead: Option[Set[(String,String)]] = None) extends ClassVisitor(ASM5) {
+  var myName: String = null
+  var filterFunctions = !funcsToRead.isEmpty
+  var followFunctions = funcsToRead getOrElse Set()
+
+  override def visit(version: Int, access: Int, name: String, sig: String,
+      superName: String, interfaces: Array[String]) {
+    myName = name
+  }
+
+  override def visitMethod(access: Int, name: String, desc: String,
+      sig: String, exceptions: Array[String]): MethodVisitor = {
+
+        /* only visit this method if it's in the list */
+       var sig = (name, desc)
+       if(filterFunctions && !(followFunctions contains sig)){
+         //return noop method visitor
+         new MethodVisitor(ASM5) { }
+       } else {
+         new MethodVisitor(ASM5) {
+           override def visitMethodInsn(
+             op: Int, owner: String, name: String, desc: String, itf: Boolean) {
+               val argTypes = Type.getArgumentTypes(desc)
+
+               if(owner != myName){
+                 output += new Tuple3(owner, name, desc)
+               }
+           }
+         }
+       }
   }
 }

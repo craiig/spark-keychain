@@ -19,7 +19,9 @@ package org.apache.spark.storage
 
 import java.util.{HashMap => JHashMap}
 
+import scala.util.{Failure, Success}
 import scala.collection.mutable
+import scala.collection.mutable.{HashMap, MultiMap}
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.Random
@@ -27,10 +29,11 @@ import scala.util.Random
 import org.apache.spark.SparkConf
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.internal.Logging
-import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint}
+import org.apache.spark.rpc.{RpcCallContext, RpcEndpointRef, RpcEnv, ThreadSafeRpcEndpoint, RpcEndpointAddress}
 import org.apache.spark.scheduler._
 import org.apache.spark.storage.BlockManagerMessages._
-import org.apache.spark.util.{ThreadUtils, Utils}
+import org.apache.spark.util.{ThreadUtils, Utils, RpcUtils}
+import org.apache.spark.SparkEnv
 
 /**
  * BlockManagerMasterEndpoint is an [[ThreadSafeRpcEndpoint]] on the master node to track statuses
@@ -69,21 +72,93 @@ class BlockManagerMasterEndpoint(
   val proactivelyReplicate = conf.get("spark.storage.replication.proactive", "false").toBoolean
 
   logInfo("BlockManagerMasterEndpoint up")
+  // Mapping of remote block master managers and their respective endpoints
+  private val remoteBlockManagerMasters = new mutable.HashMap
+    [String, RpcEndpointRef]
+
+  def addRemoteBlockManagerMaster(host: String, port: Int){
+    Utils.checkHost(host, "Expected hostname")
+    val driverUrl = RpcEndpointAddress(host, port, BlockManagerMaster.DRIVER_ENDPOINT_NAME).toString
+
+    rpcEnv.asyncSetupEndpointRefByURI(driverUrl).flatMap { ref =>
+      // This is a very fast action so we can use "ThreadUtils.sameThread"
+      //driver = Some(ref) //hoping that we set endpoints via register response
+      ref.ask[RegisterRemoteBlockManagerMasterResponse](
+        RegisterRemoteBlockManagerMaster(self))
+    }(ThreadUtils.sameThread).onComplete {
+      // This is a very fast action so we can use "ThreadUtils.sameThread"
+      case Success(msg) => Utils.tryLogNonFatalError {
+        Option(self).foreach(_.send(msg)) // msg must be RegisteredRemoteBlockManagerMaster
+      }
+      case Failure(e) => {
+        logError(s"Cannot register with driver: $driverUrl", e)
+        //System.exit(1)
+      }
+    }(ThreadUtils.sameThread)
+  }
+
+  def deregisterFromRemoteBlockManagerMasters(){
+    //tell all the remote BMMs that we're unavailablAe
+    for((_,rbmm) <- remoteBlockManagerMasters) {
+      rbmm.send( DeregisterRemoteBlockManagerMaster(self) )
+    }
+  }
+
+  override def receive: PartialFunction[Any, Unit] = {
+    case RegisteredRemoteBlockManagerMaster(remoteBlockManagerMasterRef) => 
+      logInfo(s"Successfully registered $remoteBlockManagerMasterRef")
+      remoteBlockManagerMasters.put(remoteBlockManagerMasterRef.address.toString,
+        remoteBlockManagerMasterRef)
+    case DeregisterRemoteBlockManagerMaster(remoteBlockManagerMasterRef) =>
+      logInfo(s"Deregistering remote BlockManagerMaster $remoteBlockManagerMasterRef")
+      remoteBlockManagerMasters.remove(
+        remoteBlockManagerMasterRef.address.toString)
+  }
 
   override def receiveAndReply(context: RpcCallContext): PartialFunction[Any, Unit] = {
     case RegisterBlockManager(blockManagerId, maxOnHeapMemSize, maxOffHeapMemSize, slaveEndpoint) =>
       context.reply(register(blockManagerId, maxOnHeapMemSize, maxOffHeapMemSize, slaveEndpoint))
+
+    case AddRemoteBlockManagerMaster(host, port) =>
+      addRemoteBlockManagerMaster(host, port)
+      context.reply(true)
+
+    case RegisterRemoteBlockManagerMaster(remoteBlockManagerMasterRef) =>
+      logInfo(s"Registered remote black manager master $remoteBlockManagerMasterRef")
+      remoteBlockManagerMasters.put(remoteBlockManagerMasterRef.address.toString,
+        remoteBlockManagerMasterRef)
+      context.reply(RegisteredRemoteBlockManagerMaster(self))
 
     case _updateBlockInfo @
         UpdateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size) =>
       context.reply(updateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size))
       listenerBus.post(SparkListenerBlockUpdated(BlockUpdatedInfo(_updateBlockInfo)))
 
-    case GetLocations(blockId) =>
-      context.reply(getLocations(blockId))
+    case GetLocations(blockId, remote) =>
+      val f = Future {
+        getLocations(blockId, remote)
+      }
+      f.onSuccess { case response => context.reply(response) }
+      f.onFailure { case t: Throwable => context.sendFailure(t) }
 
-    case GetLocationsMultipleBlockIds(blockIds) =>
-      context.reply(getLocationsMultipleBlockIds(blockIds))
+    case GetLocationsMultipleBlockIds(blockIds, remote) =>
+      val f = Future {
+        getLocationsMultipleBlockIds(blockIds, remote)
+      }
+      f.onSuccess { case response => context.reply(response) }
+      f.onFailure { case t: Throwable => context.sendFailure(t) }
+
+    case GetRDDsUsingBlockId(blockId) =>
+      context.reply(getRDDsUsingBlockId(blockId))
+
+    case RegisterRDDUsingBlockId(blockId, rddId) =>
+      context.reply(registerRDDUsingBlockId(blockId, rddId))
+
+    case DeregisterRDDUsingBlockId(blockId, rddId) =>
+      context.reply(deregisterRDDUsingBlockId(blockId, rddId))
+
+    case GetAllRDDsUsingBlockIds() =>
+      context.reply(getAllRDDsUsingBlockIds)
 
     case GetPeers(blockManagerId) =>
       context.reply(getPeers(blockManagerId))
@@ -121,6 +196,7 @@ class BlockManagerMasterEndpoint(
       context.reply(true)
 
     case StopBlockManagerMaster =>
+      deregisterFromRemoteBlockManagerMasters()
       context.reply(true)
       stop()
 
@@ -418,14 +494,123 @@ class BlockManagerMasterEndpoint(
     true
   }
 
-  private def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
-    if (blockLocations.containsKey(blockId)) blockLocations.get(blockId).toSeq else Seq.empty
+  private def canGetRemote(blockId: BlockId): Boolean = {
+    /* Only allow rdd unique blockids to be read remotely 
+     * any other blocks will have issues */
+    blockId match {
+      case RDDUniqueBlockId(_) => true
+      //case RDDBlockId(_, _) => true // uncomment this to share non-uniaue RDD blocks - THIS IS VERY UNSAFE
+      case _ => false
+    }
+  }
+
+  private def getRemoteLocations(blockId: BlockId)
+  : Option[Seq[BlockManagerId]]= {
+    if (!canGetRemote(blockId)){
+      return None
+    }
+
+    val r:Seq[Seq[BlockManagerId]] = remoteBlockManagerMasters.toSeq.map (
+    { case (name, rbmm) => {
+        val f = rbmm.ask[Seq[BlockManagerId]]( GetLocations(blockId, false) )
+        //catch a failure and remove the rbmm from the list to stop further failures
+        f onFailure { case f =>
+          remoteBlockManagerMasters.synchronized {
+            logInfo(s"getRemoteLocations failed, removing $rbmm")
+            remoteBlockManagerMasters.remove(name)
+          }
+        }
+        //return an empty sequence on failure
+        f.fallbackTo( Future { Seq.empty } )
+        RpcUtils.askRpcTimeout(conf).awaitResult(f)
+      } } )
+
+    if (r.length > 0){
+      val ret:Seq[BlockManagerId] = r.reduce( (a,b) => {
+        a ++ b
+      } )
+
+      Some(ret)
+    } else {
+      None
+    }
+  }
+
+  private def getRemoteLocationsMultipleBlockIds(blockIds: Array[BlockId])
+  : Option[IndexedSeq[Seq[BlockManagerId]]]= {
+    //filter out anything that we can't ask for remotely
+    //TODO since we don't ask for broadcast rdds using this method, we skip this for now
+    // we need to make sure we return the locations int he right order
+    val r:Seq[IndexedSeq[Seq[BlockManagerId]]] = remoteBlockManagerMasters.toSeq.map (
+    { case (name, rbmm) => {
+      val f = rbmm.ask[IndexedSeq[Seq[BlockManagerId]]]( GetLocationsMultipleBlockIds(blockIds, false) )
+        //catch a failure and remove the rbmm from the list to stop further failures
+      f onFailure { case f =>
+        remoteBlockManagerMasters.synchronized {
+          logInfo(s"getRemoteLocationsMultipleBlockIds failed, removing $rbmm")
+          remoteBlockManagerMasters.remove(name)
+        }
+      }
+      //return an empty sequence on failure
+      f.fallbackTo( Future { blockIds.map( _ => Seq.empty ) } )
+      RpcUtils.askRpcTimeout(conf).awaitResult(f)
+    } } ) 
+
+    if (r.length > 0){
+      val ret:IndexedSeq[Seq[BlockManagerId]] = r.reduce( (a,b) => { //a,b are indexedseqs holding the ordered list of each rBMM's response
+        a.zip(b).map(x => x._1 ++ x._2) //combine each result for the block id
+      })
+      Some(ret)
+    } else {
+      None
+    }
+  }
+
+  private def getLocations(blockId: BlockId, remote: Boolean): Seq[BlockManagerId] = {
+    val remoteLocs = if(remote) {
+      getRemoteLocations(blockId) match {
+          case Some(remoteLocs) => remoteLocs
+          case None => Seq.empty
+        }
+      } else Seq.empty
+    
+     remoteLocs ++ (if (blockLocations.containsKey(blockId)) blockLocations.get(blockId).toSeq else Seq.empty)
   }
 
   private def getLocationsMultipleBlockIds(
-      blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
-    blockIds.map(blockId => getLocations(blockId))
+      blockIds: Array[BlockId], remote: Boolean)
+  : IndexedSeq[Seq[BlockManagerId]] = {
+    val a = blockIds.map(blockId => getLocations(blockId, false))
+    if (remote){
+      val b = getRemoteLocationsMultipleBlockIds(blockIds)
+      b match {
+        case Some(r) => {
+          val ret = a.zip(r).map(x => x._1 ++ x._2)
+          ret
+        }
+        case None => a
+      }
+    } else {
+      a
+    }
   }
+
+  // Track block IDs to RDDs
+  private val blockIdToRDD
+    = new HashMap[BlockId, scala.collection.mutable.Set[Int]] with MultiMap[BlockId, Int]
+
+  private def getRDDsUsingBlockId(blockId: BlockId): Set[Int] = {
+    blockIdToRDD.get(blockId).getOrElse( mutable.Set() ).toSet
+  }
+  private def registerRDDUsingBlockId(blockId: BlockId, rddId: Int): Boolean = {
+    blockIdToRDD.addBinding( blockId, rddId )
+    return true
+  }
+  private def deregisterRDDUsingBlockId(blockId: BlockId, rddId: Int): Boolean = {
+    blockIdToRDD.removeBinding(blockId, rddId)
+    return true
+  }
+  private def getAllRDDsUsingBlockIds = blockIdToRDD.toSeq
 
   /** Get the list of the peers of the given block manager */
   private def getPeers(blockManagerId: BlockManagerId): Seq[BlockManagerId] = {

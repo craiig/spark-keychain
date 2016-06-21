@@ -24,7 +24,7 @@ import org.apache.spark.{Partition, SparkContext, TaskContext}
 /**
  * An RDD partition used to recover checkpointed data.
  */
-private[spark] class CheckpointRDDPartition(val index: Int) extends Partition
+private[spark] class CheckpointRDDPartition(val rdd: RDD[_], val index: Int) extends Partition
 
 /**
  * An RDD that recovers checkpointed data from storage.

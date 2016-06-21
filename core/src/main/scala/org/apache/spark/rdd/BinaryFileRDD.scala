@@ -47,7 +47,7 @@ private[spark] class BinaryFileRDD[T](
     val rawSplits = inputFormat.getSplits(jobContext).toArray
     val result = new Array[Partition](rawSplits.size)
     for (i <- 0 until rawSplits.size) {
-      result(i) = new NewHadoopPartition(id, i, rawSplits(i).asInstanceOf[InputSplit with Writable])
+      result(i) = new NewHadoopPartition(this, i, rawSplits(i).asInstanceOf[InputSplit with Writable])
     }
     result
   }

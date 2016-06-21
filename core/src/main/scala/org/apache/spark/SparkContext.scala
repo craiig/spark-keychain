@@ -38,7 +38,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileSystem, Path}
 import org.apache.hadoop.io.{ArrayWritable, BooleanWritable, BytesWritable, DoubleWritable, FloatWritable, IntWritable, LongWritable, NullWritable, Text, Writable}
 import org.apache.hadoop.mapred.{FileInputFormat, InputFormat, JobConf, SequenceFileInputFormat, TextInputFormat}
-import org.apache.hadoop.mapreduce.{InputFormat => NewInputFormat, Job => NewHadoopJob}
+import org.apache.hadoop.mapreduce.{InputFormat => NewInputFormat, Job => NewHadoopJob, InputSplit => NewInputSplit}
 import org.apache.hadoop.mapreduce.lib.input.{FileInputFormat => NewFileInputFormat}
 
 import org.apache.spark.annotation.DeveloperApi
@@ -262,6 +262,12 @@ class SparkContext(config: SparkConf) extends Logging {
   // Used to store a URL for each static file/jar together with the file's local timestamp
   private[spark] val addedFiles = new ConcurrentHashMap[String, Long]().asScala
   private[spark] val addedJars = new ConcurrentHashMap[String, Long]().asScala
+
+  // Keep track of all RDDS
+  private[spark] val allRdds = {
+    val map: ConcurrentMap[Int, RDD[_]] = new MapMaker().weakValues().makeMap[Int, RDD[_]]()
+    map.asScala
+  }
 
   // Keeps track of all persisted RDDs
   private[spark] val persistentRdds = {
@@ -1184,7 +1190,9 @@ class SparkContext(config: SparkConf) extends Logging {
       conf: Configuration = hadoopConfiguration,
       fClass: Class[F],
       kClass: Class[K],
-      vClass: Class[V]): RDD[(K, V)] = withScope {
+      vClass: Class[V],
+      blockIdFunc: Option[(RDD[_], NewInputSplit) => BlockId] = None
+    ): RDD[(K, V)] = withScope {
     assertNotStopped()
 
     // This is a hack to enforce loading hdfs-site.xml.
@@ -1194,7 +1202,7 @@ class SparkContext(config: SparkConf) extends Logging {
     // Add necessary security credentials to the JobConf. Required to access secure HDFS.
     val jconf = new JobConf(conf)
     SparkHadoopUtil.get.addCredentials(jconf)
-    new NewHadoopRDD(this, fClass, kClass, vClass, jconf)
+    new NewHadoopRDD(this, fClass, kClass, vClass, jconf, blockIdFunc)
   }
 
   /**
@@ -1698,6 +1706,17 @@ class SparkContext(config: SparkConf) extends Logging {
   /** The version of Spark on which this application is running. */
   def version: String = SPARK_VERSION
 
+  def getBlockManagerMasterURL: String = 
+    env.blockManager.master.driverEndpoint.address.toSparkURL
+
+  /**
+   * Connect to a remote BlockManagerMaster and start sharing RDD data
+   */
+  def addRemoteBlockManagerMaster(url: String){
+    val (host, port) = Utils.extractHostPortFromSparkUrl(url)
+    env.blockManager.master.addRemoteBlockManagerMaster(host, port)
+  }
+
   /**
    * Return a map from the slave to the max memory available for caching and the remaining
    * memory available for caching.
@@ -1732,6 +1751,37 @@ class SparkContext(config: SparkConf) extends Logging {
    * @note This does not necessarily mean the caching or computation was successful.
    */
   def getPersistentRDDs: Map[Int, RDD[_]] = persistentRdds.toMap
+
+  /**
+   * Returns an immutable map of all RDDs that have registered with this SparkContext
+   */
+  def getAllRDDs: Seq[RDD[_]] = allRdds.values.toSeq
+  def getRDD(id:Int): RDD[_] = allRdds(id)
+
+  def printDependencyGraph: Unit = {
+    val rdds = getAllRDDs
+    println("digraph {");
+    for(rdd <- rdds){
+      println("rdd_"+rdd.id+"["+rdds.getClass.getName+"];");
+      val deps = rdd.dependencies
+      for(d <- deps){
+        println("rdd_"+rdd.id+" -> rdd_"+d.rdd.id+";");
+      }
+    }
+    println("}")
+  }
+
+  def printBlockIDs: Unit = {
+    val blockids:Seq[(BlockId, Set[Int])]
+      = env.blockManager.master.getAllRDDsUsingBlockIds
+    for( (blockid, rdds) <- blockids ){
+      //println(s"BlockId: $blockid")
+      println(s"BlockId: '${blockid}")
+      for(r <- rdds.toSeq){
+        println(s"\trdd: $r")
+      }
+    }
+  }
 
   /**
    * :: DeveloperApi ::
@@ -2295,6 +2345,10 @@ class SparkContext(config: SparkConf) extends Logging {
     f
   }
 
+  private[spark] def hash[F <: AnyRef](f: F): Option[String] = {
+    ClosureCleaner.hash(f)
+  }
+
   /**
    * Set the directory under which RDDs are going to be checkpointed.
    * @param directory path to the directory where checkpoint files will be stored
@@ -2343,6 +2397,12 @@ class SparkContext(config: SparkConf) extends Logging {
 
   /** Register a new RDD, returning its RDD ID */
   private[spark] def newRddId(): Int = nextRddId.getAndIncrement()
+
+  private[spark] def newRddId(rdd: RDD[_]): Int = {
+    val id = nextRddId.getAndIncrement()
+    allRdds(id) = rdd
+    id
+  }
 
   /**
    * Registers listeners specified in spark.extraListeners, then starts the listener bus.

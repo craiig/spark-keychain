@@ -22,7 +22,7 @@ import scala.reflect.ClassTag
 import org.apache.spark.{NarrowDependency, Partition, TaskContext}
 import org.apache.spark.annotation.DeveloperApi
 
-private[spark] class PartitionPruningRDDPartition(idx: Int, val parentSplit: Partition)
+private[spark] class PartitionPruningRDDPartition(val rdd: RDD[_], idx: Int, val parentSplit: Partition)
   extends Partition {
   override val index = idx
 }
@@ -38,7 +38,7 @@ private[spark] class PruneDependency[T](rdd: RDD[T], partitionFilterFunc: Int =>
   @transient
   val partitions: Array[Partition] = rdd.partitions
     .filter(s => partitionFilterFunc(s.index)).zipWithIndex
-    .map { case(split, idx) => new PartitionPruningRDDPartition(idx, split) : Partition }
+    .map { case(split, idx) => new PartitionPruningRDDPartition(rdd, idx, split) : Partition }
 
   override def getParents(partitionId: Int): List[Int] = {
     List(partitions(partitionId).asInstanceOf[PartitionPruningRDDPartition].parentSplit.index)

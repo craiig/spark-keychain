@@ -23,7 +23,7 @@ import org.apache.spark.{Partition, TaskContext}
 import org.apache.spark.util.Utils
 
 private[spark]
-class ZippedWithIndexRDDPartition(val prev: Partition, val startIndex: Long)
+class ZippedWithIndexRDDPartition(val rdd: RDD[_], val prev: Partition, val startIndex: Long)
   extends Partition with Serializable {
   override val index: Int = prev.index
 }
@@ -56,7 +56,7 @@ class ZippedWithIndexRDD[T: ClassTag](prev: RDD[T]) extends RDD[(T, Long)](prev)
   }
 
   override def getPartitions: Array[Partition] = {
-    firstParent[T].partitions.map(x => new ZippedWithIndexRDDPartition(x, startIndices(x.index)))
+    firstParent[T].partitions.map(x => new ZippedWithIndexRDDPartition(this, x, startIndices(x.index)))
   }
 
   override def getPreferredLocations(split: Partition): Seq[String] =

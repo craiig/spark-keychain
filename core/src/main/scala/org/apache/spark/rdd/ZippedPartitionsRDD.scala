@@ -21,18 +21,43 @@ import java.io.{IOException, ObjectOutputStream}
 
 import scala.reflect.ClassTag
 
+import org.apache.spark.SparkException
+import org.apache.spark.internal.Logging
 import org.apache.spark.{OneToOneDependency, Partition, SparkContext, TaskContext}
 import org.apache.spark.util.Utils
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class ZippedPartitionsPartition(
+    val rdd: RDD[_],
     idx: Int,
     @transient private val rdds: Seq[RDD[_]],
     @transient val preferredLocations: Seq[String])
-  extends Partition {
+  extends Partition with Logging {
 
   override val index: Int = idx
   var partitionValues = rdds.map(rdd => rdd.partitions(idx))
+  @transient var partitionBlockIds = rdds.map(rdd => rdd.partitions(idx).getBlockId(rdd))
   def partitions: Seq[Partition] = partitionValues
+
+  override val blockId: Option[BlockId] = {
+    //if all parent rdds are unique rdds then we can be too
+    val rddIsUnique = partitionBlockIds.map( (p) => p match {
+      case RDDUniqueBlockId(_) => true
+      case RDDBlockId(_,_) => false
+      case _ => throw new SparkException("Unexpected blockId type")
+    })
+    val canBeUnique = rddIsUnique.foldLeft(true)( _ && _ )
+    if( canBeUnique){
+      var str = s"zip { ${partitionBlockIds.mkString(",")}, ${index}"
+      Some(RDDUniqueBlockId(str))
+    } else {
+      logInfo(s"RDD zip falling back to standard block id: "
+        + s"rdd parents: ${rddIsUnique.mkString(",")}"
+        + s" callsite: ${rdd.getCreationSite}"
+        )
+      Some(RDDBlockId(rdd.id, index))
+    }
+  }
 
   @throws(classOf[IOException])
   private def writeObject(oos: ObjectOutputStream): Unit = Utils.tryOrIOException {
@@ -62,7 +87,7 @@ private[spark] abstract class ZippedPartitionsBaseRDD[V: ClassTag](
       // Check whether there are any hosts that match all RDDs; otherwise return the union
       val exactMatchLocations = prefs.reduce((x, y) => x.intersect(y))
       val locs = if (!exactMatchLocations.isEmpty) exactMatchLocations else prefs.flatten.distinct
-      new ZippedPartitionsPartition(i, rdds, locs)
+      new ZippedPartitionsPartition(this, i, rdds, locs)
     }
   }
 

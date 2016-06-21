@@ -38,22 +38,23 @@ import org.apache.spark.util.Utils
  *                                this partition refers to
  */
 private[spark] class UnionPartition[T: ClassTag](
+    val rdd: RDD[T],
     idx: Int,
-    @transient private val rdd: RDD[T],
+    @transient private val parentRdd: RDD[T],
     val parentRddIndex: Int,
     @transient private val parentRddPartitionIndex: Int)
   extends Partition {
 
-  var parentPartition: Partition = rdd.partitions(parentRddPartitionIndex)
+  var parentPartition: Partition = parentRdd.partitions(parentRddPartitionIndex)
 
-  def preferredLocations(): Seq[String] = rdd.preferredLocations(parentPartition)
+  def preferredLocations(): Seq[String] = parentRdd.preferredLocations(parentPartition)
 
   override val index: Int = idx
 
   @throws(classOf[IOException])
   private def writeObject(oos: ObjectOutputStream): Unit = Utils.tryOrIOException {
     // Update the reference to parent split at the time of task serialization
-    parentPartition = rdd.partitions(parentRddPartitionIndex)
+    parentPartition = parentRdd.partitions(parentRddPartitionIndex)
     oos.defaultWriteObject()
   }
 }
@@ -84,7 +85,7 @@ class UnionRDD[T: ClassTag](
     val array = new Array[Partition](parRDDs.map(_.partitions.length).seq.sum)
     var pos = 0
     for ((rdd, rddIndex) <- rdds.zipWithIndex; split <- rdd.partitions) {
-      array(pos) = new UnionPartition(pos, rdd, rddIndex, split.index)
+      array(pos) = new UnionPartition(this, pos, rdd, rddIndex, split.index)
       pos += 1
     }
     array

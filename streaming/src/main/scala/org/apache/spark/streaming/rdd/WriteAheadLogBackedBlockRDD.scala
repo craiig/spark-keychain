@@ -45,10 +45,12 @@ import org.apache.spark.util.io.ChunkedByteBuffer
 private[streaming]
 class WriteAheadLogBackedBlockRDDPartition(
     val index: Int,
-    val blockId: BlockId,
+    val givenBlockId: BlockId,
     val isBlockIdValid: Boolean,
     val walRecordHandle: WriteAheadLogRecordHandle
-  ) extends Partition
+  ) extends Partition {
+    override val blockId = Some(givenBlockId)
+}
 
 
 /**
@@ -117,7 +119,7 @@ class WriteAheadLogBackedBlockRDD[T: ClassTag](
     val blockManager = SparkEnv.get.blockManager
     val serializerManager = SparkEnv.get.serializerManager
     val partition = split.asInstanceOf[WriteAheadLogBackedBlockRDDPartition]
-    val blockId = partition.blockId
+    val blockId = partition.blockId.get
 
     def getBlockFromBlockManager(): Option[Iterator[T]] = {
       blockManager.get[T](blockId).map(_.data.asInstanceOf[Iterator[T]])
@@ -184,7 +186,7 @@ class WriteAheadLogBackedBlockRDD[T: ClassTag](
   override def getPreferredLocations(split: Partition): Seq[String] = {
     val partition = split.asInstanceOf[WriteAheadLogBackedBlockRDDPartition]
     val blockLocations = if (partition.isBlockIdValid) {
-      getBlockIdLocations().get(partition.blockId)
+      getBlockIdLocations().get(partition.blockId.get)
     } else {
       None
     }

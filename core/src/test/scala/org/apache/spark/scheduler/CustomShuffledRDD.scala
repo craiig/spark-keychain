@@ -66,7 +66,7 @@ class CoalescedPartitioner(val parent: Partitioner, val partitionStartIndices: A
 }
 
 private[spark] class CustomShuffledRDDPartition(
-    val index: Int, val startIndexInParent: Int, val endIndexInParent: Int)
+    val rdd: RDD[_], val index: Int, val startIndexInParent: Int, val endIndexInParent: Int)
   extends Partition {
 
   override def hashCode(): Int = index
@@ -98,7 +98,7 @@ class CustomShuffledRDD[K, V, C](
     Array.tabulate[Partition](partitionStartIndices.length) { i =>
       val startIndex = partitionStartIndices(i)
       val endIndex = if (i < partitionStartIndices.length - 1) partitionStartIndices(i + 1) else n
-      new CustomShuffledRDDPartition(i, startIndex, endIndex)
+      new CustomShuffledRDDPartition(this, i, startIndex, endIndex)
     }
   }
 

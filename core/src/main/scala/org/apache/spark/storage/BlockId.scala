@@ -20,6 +20,9 @@ package org.apache.spark.storage
 import java.util.UUID
 
 import org.apache.spark.annotation.DeveloperApi
+import org.apache.spark.SparkContext
+import org.apache.spark.Partition
+import org.apache.spark.rdd.RDD
 
 /**
  * :: DeveloperApi ::
@@ -51,6 +54,11 @@ sealed abstract class BlockId {
 @DeveloperApi
 case class RDDBlockId(rddId: Int, splitIndex: Int) extends BlockId {
   override def name: String = "rdd_" + rddId + "_" + splitIndex
+}
+
+@DeveloperApi
+case class RDDUniqueBlockId(partitionId:String) extends BlockId {
+  override def name: String = "rddunique_" + partitionId
 }
 
 // Format of the shuffle block ids (including data and index) should be kept in sync with
@@ -103,6 +111,7 @@ private[spark] case class TestBlockId(id: String) extends BlockId {
 @DeveloperApi
 object BlockId {
   val RDD = "rdd_([0-9]+)_([0-9]+)".r
+  val RDD_UNIQUE = "rddunique_(.+)".r
   val SHUFFLE = "shuffle_([0-9]+)_([0-9]+)_([0-9]+)".r
   val SHUFFLE_DATA = "shuffle_([0-9]+)_([0-9]+)_([0-9]+).data".r
   val SHUFFLE_INDEX = "shuffle_([0-9]+)_([0-9]+)_([0-9]+).index".r
@@ -113,8 +122,13 @@ object BlockId {
 
   /** Converts a BlockId "name" String back into a BlockId. */
   def apply(id: String): BlockId = id match {
+    /* CM Note: this is used atleast by storage/DiskBlockManager.scala
+     * to do a lookup from a filename on disk, to a proper block ID
+     * so we need to make sure to implement this as well */
     case RDD(rddId, splitIndex) =>
       RDDBlockId(rddId.toInt, splitIndex.toInt)
+    case RDD_UNIQUE(partitionId) =>
+      RDDUniqueBlockId(partitionId)
     case SHUFFLE(shuffleId, mapId, reduceId) =>
       ShuffleBlockId(shuffleId.toInt, mapId.toInt, reduceId.toInt)
     case SHUFFLE_DATA(shuffleId, mapId, reduceId) =>

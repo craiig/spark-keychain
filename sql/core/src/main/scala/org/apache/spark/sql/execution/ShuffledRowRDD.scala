@@ -29,6 +29,7 @@ import org.apache.spark.sql.catalyst.InternalRow
  * (`startPreShufflePartitionIndex` to `endPreShufflePartitionIndex - 1`, inclusive).
  */
 private final class ShuffledRowRDDPartition(
+    val rdd: RDD[_],
     val postShufflePartitionIndex: Int,
     val startPreShufflePartitionIndex: Int,
     val endPreShufflePartitionIndex: Int) extends Partition {
@@ -142,7 +143,7 @@ class ShuffledRowRDD(
         } else {
           numPreShufflePartitions
         }
-      new ShuffledRowRDDPartition(i, startIndex, endIndex)
+      new ShuffledRowRDDPartition(this, i, startIndex, endIndex)
     }
   }
 

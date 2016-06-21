@@ -94,6 +94,7 @@ class CacheManager extends Logging {
     if (lookupCachedData(planToCache).nonEmpty) {
       logWarning("Asked to cache already cached data.")
     } else {
+      logInfo(s"Caching query: ${planToCache.simpleString}")
       val sparkSession = query.sparkSession
       cachedData.add(CachedData(
         planToCache,

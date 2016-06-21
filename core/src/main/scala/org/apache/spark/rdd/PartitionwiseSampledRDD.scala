@@ -22,13 +22,30 @@ import java.util.Random
 import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, TaskContext}
+import org.apache.spark.internal.Logging
 import org.apache.spark.util.random.RandomSampler
 import org.apache.spark.util.Utils
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark]
-class PartitionwiseSampledRDDPartition(val prev: Partition, val seed: Long)
-  extends Partition with Serializable {
+class PartitionwiseSampledRDDPartition(val rdd: RDD[_], val prev: Partition, val seed: Long)
+  extends Partition with Serializable with Logging {
   override val index: Int = prev.index
+
+  override val blockId: Option[BlockId] = {
+    val prevBlockID = prev.blockId
+    if( !prevBlockID.isEmpty && prevBlockID.get.isInstanceOf[RDDUniqueBlockId] ){
+      /* index is encoded by prevBlockId */
+      val str = s"PartitionwiseSampledRDD{ seed:${seed}, prev:${prevBlockID.get} }"
+      Some(RDDUniqueBlockId(str))
+    } else {
+      logInfo(s"PartitionwiseSampledRDDPartition falling back to standard block id: "
+        //+ s"rdd parent: ${prev.rdd.getClass().getName()}"
+        + s" callsite: ${rdd.getCreationSite}"
+        )
+      Some(RDDBlockId(rdd.id, index))
+    }
+  }
 }
 
 /**
@@ -55,7 +72,7 @@ private[spark] class PartitionwiseSampledRDD[T: ClassTag, U: ClassTag](
 
   override def getPartitions: Array[Partition] = {
     val random = new Random(seed)
-    firstParent[T].partitions.map(x => new PartitionwiseSampledRDDPartition(x, random.nextLong()))
+    firstParent[T].partitions.map(x => new PartitionwiseSampledRDDPartition(this, x, random.nextLong()))
   }
 
   override def getPreferredLocations(split: Partition): Seq[String] =

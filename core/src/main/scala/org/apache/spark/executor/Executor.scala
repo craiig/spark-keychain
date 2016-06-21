@@ -43,6 +43,8 @@ import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
 import org.apache.spark.util._
 import org.apache.spark.util.io.ChunkedByteBuffer
 
+import com.insightfullogic.honest_profiler.core.control.{Agent => SampleAgent};
+
 /**
  * Spark executor, backed by a threadpool to run tasks.
  *
@@ -333,6 +335,29 @@ private[spark] class Executor(
         taskStartCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
         } else 0L
+
+        var sampling = conf.getBoolean("spark.profiling.sampleStacks", false)
+        var method_tracing = false
+        if (!conf.getOption("spark.profiling.dir").isEmpty) {
+          //method_tracing = conf.getBoolean("spark.profiling.methodTracing", false)
+          val appId = conf.getAppId
+          if(sampling){
+            if(SampleAgent.isRunning()){
+              SampleAgent.stop()
+            }
+            val logPath = conf.get("spark.profiling.dir") + s"/profile_app=${appId}_exec=${executorId}_task=${taskId}.hpl"
+            val samplingMin = conf.getInt("spark.profiling.samplingIntervalMin", 11)
+            val samplingMax = conf.getInt("spark.profiling.samplingIntervalMax", 2*samplingMin)
+            SampleAgent.setFilePath(logPath)
+            SampleAgent.setSamplingInterval(samplingMin, samplingMax); //41 milliseconds sufficient?
+            logInfo(s"CPU Sampling Starting. Sampling Min: $samplingMin Max: $samplingMax")
+            val started = SampleAgent.start()
+            if (!started){
+              logWarning("CPU Sampling failed to start")
+            }
+          }
+        }
+        
         var threwException = true
         val value = try {
           val res = task.run(
@@ -377,6 +402,10 @@ private[spark] class Executor(
         val taskFinishCpu = if (threadMXBean.isCurrentThreadCpuTimeSupported) {
           threadMXBean.getCurrentThreadCpuTime
         } else 0L
+        if (sampling){
+          SampleAgent.stop()
+          logInfo(s"CPU Sampling Stopped. Log stored at: ${SampleAgent.getFilePath}")
+        }
 
         // If the task has been killed, let's fail it.
         task.context.killTaskIfInterrupted()

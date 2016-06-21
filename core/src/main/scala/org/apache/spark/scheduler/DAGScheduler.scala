@@ -274,7 +274,7 @@ class DAGScheduler(
         IndexedSeq.fill(rdd.partitions.length)(Nil)
       } else {
         val blockIds =
-          rdd.partitions.indices.map(index => RDDBlockId(rdd.id, index)).toArray[BlockId]
+          rdd.partitions.map(part => part.getBlockId(rdd)).toArray[BlockId]
         blockManagerMaster.getLocations(blockIds).map { bms =>
           bms.map(bm => TaskLocation(bm.host, bm.executorId))
         }

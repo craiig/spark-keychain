@@ -38,18 +38,31 @@ import org.apache.spark.internal.config.IGNORE_CORRUPT_FILES
 import org.apache.spark.rdd.NewHadoopRDD.NewHadoopMapPartitionsWithSplitRDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.{SerializableConfiguration, ShutdownHookManager}
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class NewHadoopPartition(
-    rddId: Int,
+    val rdd: RDD[_],
     val index: Int,
-    rawSplit: InputSplit with Writable)
+    rawSplit: InputSplit with Writable,
+    blockIdFunc: Option[(RDD[_], InputSplit) => BlockId] = None
+    )
   extends Partition {
+
+  val rddId = rdd.id;
 
   val serializableHadoopSplit = new SerializableWritable(rawSplit)
 
   override def hashCode(): Int = 31 * (31 + rddId) + index
 
   override def equals(other: Any): Boolean = super.equals(other)
+
+  override val blockId: Option[BlockId] = {
+    Some(
+      blockIdFunc.getOrElse((rdd:RDD[_], is:InputSplit) => {
+        RDDBlockId(rdd.id, index)
+      })( rdd, serializableHadoopSplit.value )
+    )
+  }
 }
 
 /**
@@ -71,7 +84,8 @@ class NewHadoopRDD[K, V](
     inputFormatClass: Class[_ <: InputFormat[K, V]],
     keyClass: Class[K],
     valueClass: Class[V],
-    @transient private val _conf: Configuration)
+    @transient private val _conf: Configuration,
+    blockIdFunc: Option[(RDD[_], InputSplit) => BlockId] = None)
   extends RDD[(K, V)](sc, Nil) with Logging {
 
   // A Hadoop Configuration can be about 10 KB, which is pretty big, so broadcast it
@@ -125,7 +139,7 @@ class NewHadoopRDD[K, V](
     val rawSplits = inputFormat.getSplits(jobContext).toArray
     val result = new Array[Partition](rawSplits.size)
     for (i <- 0 until rawSplits.size) {
-      result(i) = new NewHadoopPartition(id, i, rawSplits(i).asInstanceOf[InputSplit with Writable])
+      result(i) = new NewHadoopPartition(this, i, rawSplits(i).asInstanceOf[InputSplit with Writable], blockIdFunc)
     }
     result
   }

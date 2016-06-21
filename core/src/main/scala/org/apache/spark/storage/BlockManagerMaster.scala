@@ -67,6 +67,30 @@ class BlockManagerMaster(
     updatedId
   }
 
+  /** Add a new remote BlockManagerMaster to this master */
+  def addRemoteBlockManagerMaster(host: String, port: Int){
+    logInfo("Trying to add remote BlockManagerMaster")
+    tell(AddRemoteBlockManagerMaster(host, port))
+    logInfo("Added remote BlockManagerMaster")
+  }
+
+  /** register an RDD ID to a block ID - called by the driver */
+  def registerRDDusingBlockId(blockId:BlockId, rddId: Int){
+    logInfo(s"registered rdd:${rddId} using block id: ${blockId.name}")
+    driverEndpoint.askSync[Boolean]( RegisterRDDUsingBlockId(blockId, rddId) )
+  }
+  def deregisterRDDusingBlockId(blockId:BlockId, rddId: Int){
+    logInfo(s"deregistered rdd:${rddId} using block id: ${blockId.name}")
+    driverEndpoint.askSync[Boolean]( DeregisterRDDUsingBlockId(blockId, rddId) )
+  }
+  /** find all RDD IDs using a block ID - called by executors */
+  def getRDDsUsingBlockId( blockId:BlockId ): Set[Int] = {
+    driverEndpoint.askSync[Set[Int]]( GetRDDsUsingBlockId(blockId) )
+  }
+  def getAllRDDsUsingBlockIds(): Seq[(BlockId, Set[Int])] = {
+    driverEndpoint.askSync[Seq[(BlockId, Set[Int])]]( GetAllRDDsUsingBlockIds() )
+  }
+
   def updateBlockInfo(
       blockManagerId: BlockManagerId,
       blockId: BlockId,
@@ -81,13 +105,13 @@ class BlockManagerMaster(
 
   /** Get locations of the blockId from the driver */
   def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
-    driverEndpoint.askSync[Seq[BlockManagerId]](GetLocations(blockId))
+    driverEndpoint.askSync[Seq[BlockManagerId]](GetLocations(blockId, true))
   }
 
   /** Get locations of multiple blockIds from the driver */
   def getLocations(blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
     driverEndpoint.askSync[IndexedSeq[Seq[BlockManagerId]]](
-      GetLocationsMultipleBlockIds(blockIds))
+      GetLocationsMultipleBlockIds(blockIds, true))
   }
 
   /**

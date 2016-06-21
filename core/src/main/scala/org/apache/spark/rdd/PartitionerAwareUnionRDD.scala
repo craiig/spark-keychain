@@ -30,6 +30,7 @@ import org.apache.spark.util.Utils
  */
 private[spark]
 class PartitionerAwareUnionRDDPartition(
+    val rdd: RDD[_],
     @transient val rdds: Seq[RDD[_]],
     override val index: Int
   ) extends Partition {
@@ -70,7 +71,7 @@ class PartitionerAwareUnionRDD[T: ClassTag](
   override def getPartitions: Array[Partition] = {
     val numPartitions = partitioner.get.numPartitions
     (0 until numPartitions).map { index =>
-      new PartitionerAwareUnionRDDPartition(rdds, index)
+      new PartitionerAwareUnionRDDPartition(this, rdds, index)
     }.toArray
   }
 

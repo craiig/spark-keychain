@@ -198,5 +198,7 @@ private[random] class MockDistro extends RandomDataGenerator[Double] {
 
   override def setSeed(seed: Long): Unit = this.seed = seed
 
+  override def getHLS(): String = ""
+
   override def copy(): MockDistro = new MockDistro
 }

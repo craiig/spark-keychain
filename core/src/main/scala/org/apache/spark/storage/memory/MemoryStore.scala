@@ -30,12 +30,16 @@ import com.google.common.io.ByteStreams
 import org.apache.spark.{SparkConf, TaskContext}
 import org.apache.spark.internal.Logging
 import org.apache.spark.memory.{MemoryManager, MemoryMode}
-import org.apache.spark.serializer.{SerializationStream, SerializerManager}
+import org.apache.spark.serializer.{SerializationStream, SerializerManager, SerializerInstance}
 import org.apache.spark.storage._
 import org.apache.spark.unsafe.Platform
 import org.apache.spark.util.{SizeEstimator, Utils}
 import org.apache.spark.util.collection.SizeTrackingVector
 import org.apache.spark.util.io.{ChunkedByteBuffer, ChunkedByteBufferOutputStream}
+
+//for array hashing tests
+import java.security.MessageDigest
+import org.apache.commons.codec.binary.Base64
 
 private sealed trait MemoryEntry[T] {
   def size: Long
@@ -130,6 +134,45 @@ private[spark] class MemoryStore(
     }
   }
 
+  /** Hash an entry and log it's hash to help measure memory
+   *  duplication. Note that serialized and deserialized versions of
+   *  the same data may not hash to the same result.
+   */
+  def hashEntry( blockId: BlockId, entry: SerializedMemoryEntry[_], classTag: ClassTag[_]){
+    if(conf.getBoolean("spark.storage.hashCachedBlocks", false)){
+      val hash = MessageDigest.getInstance("SHA-256")
+      val chunks = entry.buffer.getChunks
+      var size = 0;
+      chunks.map( (b) => {
+        size += b.remaining
+        hash.update(b) 
+      })
+      val hashbytes = hash.digest;
+      val hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
+      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size} serialized: 1")
+    }
+  }
+
+  def hashEntry( blockId: BlockId, entry: DeserializedMemoryEntry[_], classTag: ClassTag[_]){
+    if(conf.getBoolean("spark.storage.hashCachedBlocks", false)){
+      //need to serialize and then pass to the hashing algorithm
+      val ser: SerializerInstance = {
+        val autoPick = !blockId.isInstanceOf[StreamBlockId]
+        serializerManager.getSerializer(classTag, autoPick).newInstance()
+      }
+      val hash = MessageDigest.getInstance("SHA-256")
+      var size = 0;
+      entry.value.map( (value) => {
+        val b = ser.serialize(value)
+        size + b.remaining
+        hash.update(b)
+      })
+      val hashbytes = hash.digest;
+      val hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
+      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size} serialized: 0")
+    }
+  }
+
   /**
    * Use `size` to test if there is enough space in MemoryStore. If so, create the ByteBuffer and
    * put it into MemoryStore. Otherwise, the ByteBuffer won't be created.
@@ -149,6 +192,7 @@ private[spark] class MemoryStore(
       val bytes = _bytes()
       assert(bytes.size == size)
       val entry = new SerializedMemoryEntry[T](bytes, memoryMode, implicitly[ClassTag[T]])
+      hashEntry(blockId, entry, implicitly[ClassTag[T]])
       entries.synchronized {
         entries.put(blockId, entry)
       }
@@ -266,6 +310,7 @@ private[spark] class MemoryStore(
         }
       }
       if (enoughStorageMemory) {
+        hashEntry(blockId, entry, classTag)
         entries.synchronized {
           entries.put(blockId, entry)
         }
@@ -389,6 +434,7 @@ private[spark] class MemoryStore(
         val success = memoryManager.acquireStorageMemory(blockId, entry.size, memoryMode)
         assert(success, "transferring unroll memory to storage memory failed")
       }
+      hashEntry(blockId, entry, classTag)
       entries.synchronized {
         entries.put(blockId, entry)
       }

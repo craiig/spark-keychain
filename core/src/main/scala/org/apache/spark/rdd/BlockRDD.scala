@@ -22,8 +22,9 @@ import scala.reflect.ClassTag
 import org.apache.spark._
 import org.apache.spark.storage.{BlockId, BlockManager}
 
-private[spark] class BlockRDDPartition(val blockId: BlockId, idx: Int) extends Partition {
+private[spark] class BlockRDDPartition(val rdd: RDD[_], val otherBlockId: BlockId, idx: Int) extends Partition {
   val index = idx
+  override val blockId = Some(otherBlockId)
 }
 
 private[spark]
@@ -35,16 +36,16 @@ class BlockRDD[T: ClassTag](sc: SparkContext, @transient val blockIds: Array[Blo
 
   override def getPartitions: Array[Partition] = {
     assertValid()
-    (0 until blockIds.length).map { i =>
-      new BlockRDDPartition(blockIds(i), i).asInstanceOf[Partition]
-    }.toArray
+    (0 until blockIds.length).map(i => {
+      new BlockRDDPartition(this, blockIds(i), i).asInstanceOf[Partition]
+    }).toArray
   }
 
   override def compute(split: Partition, context: TaskContext): Iterator[T] = {
     assertValid()
     val blockManager = SparkEnv.get.blockManager
-    val blockId = split.asInstanceOf[BlockRDDPartition].blockId
-    blockManager.get[T](blockId) match {
+    val blockId = split.asInstanceOf[BlockRDDPartition].blockId.get
+    blockManager.get(blockId) match {
       case Some(block) => block.data.asInstanceOf[Iterator[T]]
       case None =>
         throw new Exception(s"Could not compute split, block $blockId of RDD $id not found")
@@ -53,7 +54,7 @@ class BlockRDD[T: ClassTag](sc: SparkContext, @transient val blockIds: Array[Blo
 
   override def getPreferredLocations(split: Partition): Seq[String] = {
     assertValid()
-    _locations(split.asInstanceOf[BlockRDDPartition].blockId)
+    _locations(split.asInstanceOf[BlockRDDPartition].blockId.get)
   }
 
   /**

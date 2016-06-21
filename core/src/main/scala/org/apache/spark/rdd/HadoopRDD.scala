@@ -40,18 +40,28 @@ import org.apache.spark.rdd.HadoopRDD.HadoopMapPartitionsWithSplitRDD
 import org.apache.spark.scheduler.{HDFSCacheTaskLocation, HostTaskLocation}
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.util.{NextIterator, SerializableConfiguration, ShutdownHookManager}
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 /**
  * A Spark split class that wraps around a Hadoop InputSplit.
  */
-private[spark] class HadoopPartition(rddId: Int, override val index: Int, s: InputSplit)
+private[spark] class HadoopPartition(val rdd: RDD[_], override val index: Int, s: InputSplit)
   extends Partition {
 
   val inputSplit = new SerializableWritable[InputSplit](s)
 
-  override def hashCode(): Int = 31 * (31 + rddId) + index
+  override def hashCode(): Int = 31 * (31 + rdd.id) + index
 
   override def equals(other: Any): Boolean = super.equals(other)
+
+  override val blockId: Option[BlockId] = {
+    if (inputSplit.value.isInstanceOf[FileSplit]) {
+      val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
+      Some(RDDUniqueBlockId(is.getPath().toString()+s" ${index}"))
+    } else {
+      Some(RDDBlockId(rdd.id, index))
+    }
+  }
 
   /**
    * Get any environment variables that should be added to the users environment when running pipes
@@ -199,7 +209,7 @@ class HadoopRDD[K, V](
     val inputSplits = inputFormat.getSplits(jobConf, minPartitions)
     val array = new Array[Partition](inputSplits.size)
     for (i <- 0 until inputSplits.size) {
-      array(i) = new HadoopPartition(id, i, inputSplits(i))
+      array(i) = new HadoopPartition(this, i, inputSplits(i))
     }
     array
   }

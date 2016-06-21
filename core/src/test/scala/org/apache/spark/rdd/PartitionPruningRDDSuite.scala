@@ -26,9 +26,9 @@ class PartitionPruningRDDSuite extends SparkFunSuite with SharedSparkContext {
     val rdd = new RDD[Int](sc, Nil) {
       override protected def getPartitions = {
         Array[Partition](
-          new TestPartition(0, 1),
-          new TestPartition(1, 1),
-          new TestPartition(2, 1))
+          new TestPartition(this, 0, 1),
+          new TestPartition(this, 1, 1),
+          new TestPartition(this, 2, 1))
       }
 
       def compute(split: Partition, context: TaskContext) = {
@@ -48,9 +48,9 @@ class PartitionPruningRDDSuite extends SparkFunSuite with SharedSparkContext {
     val rdd = new RDD[Int](sc, Nil) {
       override protected def getPartitions = {
         Array[Partition](
-          new TestPartition(0, 4),
-          new TestPartition(1, 5),
-          new TestPartition(2, 6))
+          new TestPartition(this, 0, 4),
+          new TestPartition(this, 1, 5),
+          new TestPartition(this, 2, 6))
       }
 
       def compute(split: Partition, context: TaskContext) = {
@@ -70,7 +70,7 @@ class PartitionPruningRDDSuite extends SparkFunSuite with SharedSparkContext {
   }
 }
 
-class TestPartition(i: Int, value: Int) extends Partition with Serializable {
+class TestPartition(val rdd:RDD[_], i: Int, value: Int) extends Partition with Serializable {
   def index: Int = i
   def testValue: Int = this.value
 }

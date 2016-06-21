@@ -24,6 +24,25 @@ import org.apache.spark.util.Utils
 
 private[spark] object BlockManagerMessages {
   //////////////////////////////////////////////////////////////////////////////////
+  // Messages from the master to other masters
+  //////////////////////////////////////////////////////////////////////////////////
+  sealed trait ToRemoteBlockManagerMaster
+
+  sealed trait RegisterRemoteBlockManagerMasterResponse;
+
+  case class RegisterRemoteBlockManagerMaster(
+    remoteBlockManagerMasterRef: RpcEndpointRef)
+  extends ToRemoteBlockManagerMaster with RegisterRemoteBlockManagerMasterResponse
+
+  case class RegisteredRemoteBlockManagerMaster(
+    remoteBlockManagerMasterRef: RpcEndpointRef)
+  extends ToRemoteBlockManagerMaster with RegisterRemoteBlockManagerMasterResponse
+
+  case class DeregisterRemoteBlockManagerMaster(
+    remoteBlockManagerMasterRef: RpcEndpointRef)
+  extends ToRemoteBlockManagerMaster
+
+  //////////////////////////////////////////////////////////////////////////////////
   // Messages from the master to slaves.
   //////////////////////////////////////////////////////////////////////////////////
   sealed trait ToBlockManagerSlave
@@ -63,6 +82,11 @@ private[spark] object BlockManagerMessages {
       sender: RpcEndpointRef)
     extends ToBlockManagerMaster
 
+  case class AddRemoteBlockManagerMaster(
+      host: String,
+      port: Int)
+    extends ToBlockManagerMaster
+
   case class UpdateBlockInfo(
       var blockManagerId: BlockManagerId,
       var blockId: BlockId,
@@ -91,9 +115,18 @@ private[spark] object BlockManagerMessages {
     }
   }
 
-  case class GetLocations(blockId: BlockId) extends ToBlockManagerMaster
+  case class GetLocations(blockId: BlockId, remote: Boolean)
+    extends ToBlockManagerMaster
 
-  case class GetLocationsMultipleBlockIds(blockIds: Array[BlockId]) extends ToBlockManagerMaster
+  case class GetLocationsMultipleBlockIds(blockIds: Array[BlockId], 
+    remote: Boolean) extends ToBlockManagerMaster
+
+  case class GetRDDsUsingBlockId(blockId: BlockId) extends ToBlockManagerMaster
+  /* Driver -> Manager */
+  case class RegisterRDDUsingBlockId(blockId: BlockId, rddId: Int) extends ToBlockManagerMaster
+  /* Driver -> Manager */
+  case class DeregisterRDDUsingBlockId(blockId: BlockId, rddId: Int) extends ToBlockManagerMaster
+  case class GetAllRDDsUsingBlockIds() extends ToBlockManagerMaster
 
   case class GetPeers(blockManagerId: BlockManagerId) extends ToBlockManagerMaster
 
