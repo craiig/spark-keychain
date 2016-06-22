@@ -2118,12 +2118,6 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
   /** Register a new RDD, returning its RDD ID */
   private[spark] def newRddId(): Int = nextRddId.getAndIncrement()
 
-  private[spark] def newRddId(rdd: RDD[_]): Int = {
-    val id = nextRddId.getAndIncrement()
-    allRdds(id) = rdd
-    id
-  }
-
   /**
    * Registers listeners specified in spark.extraListeners, then starts the listener bus.
    * This should be called after all internal listeners have been registered with the listener bus
