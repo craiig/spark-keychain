@@ -123,11 +123,11 @@ class BlockManagerMasterEndpoint(
         blockManagerId, blockId, storageLevel, deserializedSize, size, externalBlockStoreSize))
       listenerBus.post(SparkListenerBlockUpdated(BlockUpdatedInfo(_updateBlockInfo)))
 
-    case GetLocations(blockId) =>
-      context.reply(getLocations(blockId))
+    case GetLocations(blockId, remote) =>
+      context.reply(getLocations(blockId, remote))
 
-    case GetLocationsMultipleBlockIds(blockIds) =>
-      context.reply(getLocationsMultipleBlockIds(blockIds))
+    case GetLocationsMultipleBlockIds(blockIds, remote) =>
+      context.reply(getLocationsMultipleBlockIds(blockIds, remote))
 
     case GetPeers(blockManagerId) =>
       context.reply(getPeers(blockManagerId))
@@ -426,13 +426,67 @@ class BlockManagerMasterEndpoint(
     true
   }
 
-  private def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
-    if (blockLocations.containsKey(blockId)) blockLocations.get(blockId).toSeq else Seq.empty
+  private def getRemoteLocations(blockId: BlockId)
+  : Option[Seq[BlockManagerId]]= {
+
+    val r:Seq[Seq[BlockManagerId]] = remoteBlockManagerMasters.values.map ( (rbmm) => { 
+      rbmm.askWithRetry[Seq[BlockManagerId]]( GetLocations(blockId, false) )
+    } ).toSeq
+
+    if (r.length > 0){
+      val ret:Seq[BlockManagerId] = r.reduce( (a,b) => {
+        a ++ b
+      } )
+
+      Some(ret)
+    } else {
+      None
+    }
+  }
+
+  private def getRemoteLocationsMultipleBlockIds(blockIds: Array[BlockId])
+  : Option[IndexedSeq[Seq[BlockManagerId]]]= {
+    val r:Seq[IndexedSeq[Seq[BlockManagerId]]] = remoteBlockManagerMasters.values.map ( (rbmm) => { 
+      rbmm.askWithRetry[IndexedSeq[Seq[BlockManagerId]]]( GetLocationsMultipleBlockIds(blockIds, false) )
+    } ).toSeq
+
+    if (r.length > 0){
+      val ret:IndexedSeq[Seq[BlockManagerId]] = r.reduce( (a,b) => { //a,b are indexedseqs holding the ordered list of each rBMM's response
+        a.zip(b).map(x => x._1 ++ x._2) //combine each result for the block id
+      })
+      Some(ret)
+    } else {
+      None
+    }
+  }
+
+  private def getLocations(blockId: BlockId, remote: Boolean): Seq[BlockManagerId] = {
+    val remoteLocs = if(remote) {
+      getRemoteLocations(blockId) match {
+          case Some(remoteLocs) => remoteLocs
+          case None => Seq.empty
+        }
+      } else Seq.empty
+    
+     remoteLocs ++ (if (blockLocations.containsKey(blockId)) blockLocations.get(blockId).toSeq else Seq.empty)
   }
 
   private def getLocationsMultipleBlockIds(
-      blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
-    blockIds.map(blockId => getLocations(blockId))
+      blockIds: Array[BlockId], remote: Boolean)
+  : IndexedSeq[Seq[BlockManagerId]] = {
+    val a = blockIds.map(blockId => getLocations(blockId, false))
+    if (remote){
+      val b = getRemoteLocationsMultipleBlockIds(blockIds)
+      b match {
+        case Some(r) => {
+          val ret = a.zip(r).map(x => x._1 ++ x._2)
+          ret
+        }
+        case None => a
+      }
+    } else {
+      a
+    }
   }
 
   /** Get the list of the peers of the given block manager */

@@ -113,9 +113,11 @@ private[spark] object BlockManagerMessages {
     }
   }
 
-  case class GetLocations(blockId: BlockId) extends ToBlockManagerMaster
+  case class GetLocations(blockId: BlockId, remote: Boolean)
+    extends ToBlockManagerMaster
 
-  case class GetLocationsMultipleBlockIds(blockIds: Array[BlockId]) extends ToBlockManagerMaster
+  case class GetLocationsMultipleBlockIds(blockIds: Array[BlockId], 
+    remote: Boolean) extends ToBlockManagerMaster
 
   case class GetPeers(blockManagerId: BlockManagerId) extends ToBlockManagerMaster
 

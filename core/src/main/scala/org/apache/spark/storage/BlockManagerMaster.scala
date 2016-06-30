@@ -80,13 +80,13 @@ class BlockManagerMaster(
 
   /** Get locations of the blockId from the driver */
   def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
-    driverEndpoint.askWithRetry[Seq[BlockManagerId]](GetLocations(blockId))
+    driverEndpoint.askWithRetry[Seq[BlockManagerId]](GetLocations(blockId, true))
   }
 
   /** Get locations of multiple blockIds from the driver */
   def getLocations(blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
     driverEndpoint.askWithRetry[IndexedSeq[Seq[BlockManagerId]]](
-      GetLocationsMultipleBlockIds(blockIds))
+      GetLocationsMultipleBlockIds(blockIds, true))
   }
 
   /**
