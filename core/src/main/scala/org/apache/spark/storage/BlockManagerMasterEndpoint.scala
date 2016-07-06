@@ -124,10 +124,18 @@ class BlockManagerMasterEndpoint(
       listenerBus.post(SparkListenerBlockUpdated(BlockUpdatedInfo(_updateBlockInfo)))
 
     case GetLocations(blockId, remote) =>
-      context.reply(getLocations(blockId, remote))
+      val f = Future {
+        getLocations(blockId, remote)
+      }
+      f.onSuccess { case response => context.reply(response) }
+      f.onFailure { case t: Throwable => context.sendFailure(t) }
 
     case GetLocationsMultipleBlockIds(blockIds, remote) =>
-      context.reply(getLocationsMultipleBlockIds(blockIds, remote))
+      val f = Future {
+        getLocationsMultipleBlockIds(blockIds, remote)
+      }
+      f.onSuccess { case response => context.reply(response) }
+      f.onFailure { case t: Throwable => context.sendFailure(t) }
 
     case GetPeers(blockManagerId) =>
       context.reply(getPeers(blockManagerId))
