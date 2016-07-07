@@ -29,7 +29,7 @@ import org.apache.spark.{Logging, SparkConf}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.scheduler._
 import org.apache.spark.storage.BlockManagerMessages._
-import org.apache.spark.util.{ThreadUtils, Utils}
+import org.apache.spark.util.{ThreadUtils, Utils, RpcUtils}
 import org.apache.spark.SparkEnv
 
 /**
@@ -437,9 +437,20 @@ class BlockManagerMasterEndpoint(
   private def getRemoteLocations(blockId: BlockId)
   : Option[Seq[BlockManagerId]]= {
 
-    val r:Seq[Seq[BlockManagerId]] = remoteBlockManagerMasters.values.map ( (rbmm) => { 
-      rbmm.askWithRetry[Seq[BlockManagerId]]( GetLocations(blockId, false) )
-    } ).toSeq
+    val r:Seq[Seq[BlockManagerId]] = remoteBlockManagerMasters.toSeq.map (
+    { case (name, rbmm) => {
+        val f = rbmm.ask[Seq[BlockManagerId]]( GetLocations(blockId, false) )
+        //catch a failure and remove the rbmm from the list to stop further failures
+        f onFailure { case f =>
+          remoteBlockManagerMasters.synchronized {
+            logInfo(s"getRemoteLocations failed, removing $rbmm")
+            remoteBlockManagerMasters.remove(name)
+          }
+        }
+        //return an empty sequence on failure
+        f.fallbackTo( Future { Seq.empty } )
+        RpcUtils.askRpcTimeout(conf).awaitResult(f)
+      } } )
 
     if (r.length > 0){
       val ret:Seq[BlockManagerId] = r.reduce( (a,b) => {
@@ -454,9 +465,21 @@ class BlockManagerMasterEndpoint(
 
   private def getRemoteLocationsMultipleBlockIds(blockIds: Array[BlockId])
   : Option[IndexedSeq[Seq[BlockManagerId]]]= {
-    val r:Seq[IndexedSeq[Seq[BlockManagerId]]] = remoteBlockManagerMasters.values.map ( (rbmm) => { 
-      rbmm.askWithRetry[IndexedSeq[Seq[BlockManagerId]]]( GetLocationsMultipleBlockIds(blockIds, false) )
-    } ).toSeq
+
+    val r:Seq[IndexedSeq[Seq[BlockManagerId]]] = remoteBlockManagerMasters.toSeq.map (
+    { case (name, rbmm) => {
+      val f = rbmm.ask[IndexedSeq[Seq[BlockManagerId]]]( GetLocationsMultipleBlockIds(blockIds, false) )
+        //catch a failure and remove the rbmm from the list to stop further failures
+      f onFailure { case f =>
+        remoteBlockManagerMasters.synchronized {
+          logInfo(s"getRemoteLocationsMultipleBlockIds failed, removing $rbmm")
+          remoteBlockManagerMasters.remove(name)
+        }
+      }
+      //return an empty sequence on failure
+      f.fallbackTo( Future { blockIds.map( _ => Seq.empty ) } )
+      RpcUtils.askRpcTimeout(conf).awaitResult(f)
+    } } ) 
 
     if (r.length > 0){
       val ret:IndexedSeq[Seq[BlockManagerId]] = r.reduce( (a,b) => { //a,b are indexedseqs holding the ordered list of each rBMM's response
