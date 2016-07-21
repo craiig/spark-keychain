@@ -16,6 +16,7 @@
  */
 
 package org.apache.spark
+import org.apache.spark.rdd.RDD
 
 /**
  * An identifier for a partition in an RDD.
@@ -25,6 +26,12 @@ trait Partition extends Serializable {
    * Get the partition's index within its parent RDD
    */
   def index: Int
+
+  /**
+   * Get the partition's string indexed given it's parent RDD
+   * Basic partitions have an ID w.r.t their RDD.id
+   */
+  def stringId( rdd:RDD[_] ): String = "rdd_" + rdd.id + "_" + index
 
   // A better default implementation of HashCode
   override def hashCode(): Int = index

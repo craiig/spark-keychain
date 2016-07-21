@@ -294,6 +294,12 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
   private[spark] val addedFiles = HashMap[String, Long]()
   private[spark] val addedJars = HashMap[String, Long]()
 
+  // Keep track of all RDDS
+  private[spark] val allRdds = new TimeStampedWeakValueHashMap[Int, RDD[_]]()
+
+  // Track partition ID to RDD
+  private[spark] val partitionToRDD = new TimeStampedWeakValueHashMap[String, (RDD[_], Partition)]()
+
   // Keeps track of all persisted RDDs
   private[spark] val persistentRdds = new TimeStampedWeakValueHashMap[Int, RDD[_]]
   private[spark] def metadataCleaner: MetadataCleaner = _metadataCleaner
@@ -1552,6 +1558,25 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
   def getPersistentRDDs: Map[Int, RDD[_]] = persistentRdds.toMap
 
   /**
+   * Returns an immutable map of all RDDs that have registered with this SparkContext
+   */
+  def getAllRDDs: Seq[RDD[_]] = allRdds.values.toSeq
+  def getRDD(id:Int): RDD[_] = allRdds(id)
+
+  def printDependencyGraph: Unit = {
+    val rdds = getAllRDDs
+    println("digraph {");
+    for(rdd <- rdds){
+      println("rdd_"+rdd.id+"["+rdds.getClass.getName+"];");
+      val deps = rdd.dependencies
+      for(d <- deps){
+        println("rdd_"+rdd.id+" -> rdd_"+d.rdd.id+";");
+      }
+    }
+    println("}")
+  }
+
+  /**
    * :: DeveloperApi ::
    * Return information about blocks stored in all of the slaves
    */
@@ -2117,6 +2142,26 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
 
   /** Register a new RDD, returning its RDD ID */
   private[spark] def newRddId(): Int = nextRddId.getAndIncrement()
+
+  private[spark] def newRddId(rdd: RDD[_]): Int = {
+    val id = nextRddId.getAndIncrement()
+    allRdds(id) = rdd
+    id
+  }
+
+  /** Track Partition IDs and their corresponding RDDs */
+  def registerRddPartition( rdd:RDD[_], part:Partition) = {
+    val partid:String = rdd.stringId(part)
+    println(s"registered rdd:${rdd.id} block id: $partid");
+    if ( partitionToRDD.contains( partid ) ){
+      throw new SparkException(s"Tried to register a duplicate block ID with SparkContext: $partid");
+    } else {
+      partitionToRDD( partid ) = ( rdd, part )
+    }
+  }
+
+  def getRddPartByBlockId( partId:String ): (RDD[_], Partition) = 
+    partitionToRDD( partId )
 
   /**
    * Registers listeners specified in spark.extraListeners, then starts the listener bus.

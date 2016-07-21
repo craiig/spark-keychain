@@ -159,7 +159,7 @@ class DAGSchedulerSuite
    * Keys are (rdd ID, partition ID). Anything not present will return an empty
    * list of cache locations silently.
    */
-  val cacheLocations = new HashMap[(Int, Int), Seq[BlockManagerId]]
+  val cacheLocations = new HashMap[(Int, String), Seq[BlockManagerId]]
   // stub out BlockManagerMaster.getLocations to use our cacheLocations
   val blockManagerMaster = new BlockManagerMaster(null, conf, true) {
       override def getLocations(blockIds: Array[BlockId]): IndexedSeq[Seq[BlockManagerId]] = {
@@ -349,7 +349,7 @@ class DAGSchedulerSuite
   test("cache location preferences w/ dependency") {
     val baseRdd = new MyRDD(sc, 1, Nil).cache()
     val finalRdd = new MyRDD(sc, 1, List(new OneToOneDependency(baseRdd)))
-    cacheLocations(baseRdd.id -> 0) =
+    cacheLocations(baseRdd.id -> "0") =
       Seq(makeBlockManagerId("hostA"), makeBlockManagerId("hostB"))
     submit(finalRdd, Array(0))
     val taskSet = taskSets(0)
@@ -361,11 +361,11 @@ class DAGSchedulerSuite
 
   test("regression test for getCacheLocs") {
     val rdd = new MyRDD(sc, 3, Nil).cache()
-    cacheLocations(rdd.id -> 0) =
+    cacheLocations(rdd.id -> "0") =
       Seq(makeBlockManagerId("hostA"), makeBlockManagerId("hostB"))
-    cacheLocations(rdd.id -> 1) =
+    cacheLocations(rdd.id -> "1") =
       Seq(makeBlockManagerId("hostB"), makeBlockManagerId("hostC"))
-    cacheLocations(rdd.id -> 2) =
+    cacheLocations(rdd.id -> "2") =
       Seq(makeBlockManagerId("hostC"), makeBlockManagerId("hostD"))
     val locs = scheduler.getCacheLocs(rdd).map(_.map(_.host))
     assert(locs === Seq(Seq("hostA", "hostB"), Seq("hostB", "hostC"), Seq("hostC", "hostD")))
@@ -390,7 +390,7 @@ class DAGSchedulerSuite
       tracker = mapOutputTracker)
     val rddC = new MyRDD(sc, 1, List(new OneToOneDependency(rddB))).cache()
     val rddD = new MyRDD(sc, 1, List(new OneToOneDependency(rddC)))
-    cacheLocations(rddC.id -> 0) =
+    cacheLocations(rddC.id -> "0") =
       Seq(makeBlockManagerId("hostA"), makeBlockManagerId("hostB"))
     submit(rddD, Array(0))
     assert(scheduler.runningStages.size === 1)
@@ -1496,8 +1496,8 @@ class DAGSchedulerSuite
     val shuffleDepTwo = new ShuffleDependency(shuffleTwoRdd, new HashPartitioner(1))
     val finalRdd = new MyRDD(sc, 1, List(shuffleDepTwo), tracker = mapOutputTracker)
     submit(finalRdd, Array(0))
-    cacheLocations(shuffleTwoRdd.id -> 0) = Seq(makeBlockManagerId("hostD"))
-    cacheLocations(shuffleTwoRdd.id -> 1) = Seq(makeBlockManagerId("hostC"))
+    cacheLocations(shuffleTwoRdd.id -> "0") = Seq(makeBlockManagerId("hostD"))
+    cacheLocations(shuffleTwoRdd.id -> "1") = Seq(makeBlockManagerId("hostC"))
     // complete stage 0
     complete(taskSets(0), Seq(
         (Success, makeMapStatus("hostA", 2)),

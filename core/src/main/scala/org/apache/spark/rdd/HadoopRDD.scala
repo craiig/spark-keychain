@@ -60,6 +60,8 @@ private[spark] class HadoopPartition(rddId: Int, idx: Int, s: InputSplit)
 
   override val index: Int = idx
 
+  override def stringId( rdd:RDD[_] ): String = "rdd_" + s.toString
+
   /**
    * Get any environment variables that should be added to the users environment when running pipes
    * @return a Map with the environment variables and corresponding values, it could be empty
