@@ -2151,10 +2151,13 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
 
   /** Track Partition IDs and their corresponding RDDs */
   def registerRddPartition( rdd:RDD[_], part:Partition) = {
-    val partid:String = rdd.stringId(part)
+    //note that this will fail when we stop having a 1:1 relationship
+    //between RDDs and blocks
+    val partid:String = part.blockId(rdd).name
     println(s"registered rdd:${rdd.id} block id: $partid");
+    println(rdd)
     if ( partitionToRDD.contains( partid ) ){
-      throw new SparkException(s"Tried to register a duplicate block ID with SparkContext: $partid");
+      throw new SparkException(s"Tried to register a duplicate block ID with SparkContext: $partid rdd.id: ${rdd.id}");
     } else {
       partitionToRDD( partid ) = ( rdd, part )
     }

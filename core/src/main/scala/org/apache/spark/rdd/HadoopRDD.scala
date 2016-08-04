@@ -47,6 +47,7 @@ import org.apache.spark.rdd.HadoopRDD.HadoopMapPartitionsWithSplitRDD
 import org.apache.spark.util.{SerializableConfiguration, ShutdownHookManager, NextIterator, Utils}
 import org.apache.spark.scheduler.{HostTaskLocation, HDFSCacheTaskLocation}
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.storage.{BlockId, RDDUniqueBlockId}
 
 /**
  * A Spark split class that wraps around a Hadoop InputSplit.
@@ -60,7 +61,9 @@ private[spark] class HadoopPartition(rddId: Int, idx: Int, s: InputSplit)
 
   override val index: Int = idx
 
-  override def stringId( rdd:RDD[_] ): String = "rdd_" + s.toString
+  override def blockId( rdd:RDD[_] ): BlockId
+    = RDDUniqueBlockId( s"${rdd.id}_$idx" )
+    //= RDDUniqueBlockId( s"${rdd.id}_$idx" )
 
   /**
    * Get any environment variables that should be added to the users environment when running pipes

@@ -139,14 +139,6 @@ abstract class RDD[T: ClassTag](
   /** A unique ID for this RDD (within its SparkContext). */
   val id: Int = sc.newRddId(this)
 
-  /** 
-   *  Get the string ID for a partition w.r.t this RDD
-   *  The RDD base class just returns whatever the partition says
-   */
-  def stringId(partition: Partition): String = {
-    partition.stringId(this)
-  }
-
   /** A friendly name for this RDD */
   @transient var name: String = null
 

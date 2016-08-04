@@ -52,22 +52,13 @@ sealed abstract class BlockId {
 }
 
 @DeveloperApi
-case class RDDBlockId(rddId: Int, splitIndex: String) extends BlockId {
-  override def name: String = "rdd_strid_" + splitIndex
+case class RDDBlockId(rddId: Int, splitIndex: Int) extends BlockId {
+  override def name: String = "rdd_" + rddId + "_" + splitIndex
 }
 
-/* Object to facilitate string to Block ID for RDDs with IDs */
-object RDDBlockId {
-  //supports old ways of creating RDDBlockId - used for testing
-  def apply(rddId: Int, splitIndex:Int): RDDBlockId = {
-    RDDBlockId( rddId, splitIndex.toString )
-  }
-  def apply(partitionId:String): RDDBlockId = {
-    val sc = SparkContext.getOrCreate()
-    val rdd:RDD[_] = sc.getRddPartByBlockId(partitionId)._1
-
-    RDDBlockId( rdd.id, partitionId )
-  }
+@DeveloperApi
+case class RDDUniqueBlockId(partitionId:String) extends BlockId {
+  override def name: String = "rddunique_" + partitionId
 }
 
 // Format of the shuffle block ids (including data and index) should be kept in sync with
@@ -119,12 +110,8 @@ private[spark] case class TestBlockId(id: String) extends BlockId {
 
 @DeveloperApi
 object BlockId {
-  //new RDD Block IDs contain only the block ID and the sparkcontext
-  //have to be consulted to resolve this back to an RDD
-  val RDD = "rddstr_([0-9a-zA-Z]+)".r
-  // purposefully not enabling support for old rdd ids
-  // so we can get exceptions if they're used
-  //val RDD = "rdd_([0-9]+)_([0-9]+)".r
+  val RDD = "rdd_([0-9]+)_([0-9]+)".r
+  val RDD_UNIQUE = "rddunique_(.+)".r
   val SHUFFLE = "shuffle_([0-9]+)_([0-9]+)_([0-9]+)".r
   val SHUFFLE_DATA = "shuffle_([0-9]+)_([0-9]+)_([0-9]+).data".r
   val SHUFFLE_INDEX = "shuffle_([0-9]+)_([0-9]+)_([0-9]+).index".r
@@ -138,8 +125,10 @@ object BlockId {
     /* CM Note: this is used atleast by storage/DiskBlockManager.scala
      * to do a lookup from a filename on disk, to a proper block ID
      * so we need to make sure to implement this as well */
-    case RDD(partId) =>
-      RDDBlockId( partId )
+    case RDD(rddId, splitIndex) =>
+      RDDBlockId(rddId.toInt, splitIndex.toInt)
+    case RDD_UNIQUE(partitionId) =>
+      RDDUniqueBlockId(partitionId)
     case SHUFFLE(shuffleId, mapId, reduceId) =>
       ShuffleBlockId(shuffleId.toInt, mapId.toInt, reduceId.toInt)
     case SHUFFLE_DATA(shuffleId, mapId, reduceId) =>

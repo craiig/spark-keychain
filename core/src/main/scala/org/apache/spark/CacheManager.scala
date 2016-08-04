@@ -30,7 +30,7 @@ import org.apache.spark.storage._
 private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
 
   /** Keys of RDD partitions that are being computed/loaded. */
-  private val loading = new mutable.HashSet[RDDBlockId]
+  private val loading = new mutable.HashSet[BlockId]
 
   /** Gets or computes an RDD partition. Used by RDD.iterator() when an RDD is cached. */
   def getOrCompute[T](
@@ -39,7 +39,7 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
       context: TaskContext,
       storageLevel: StorageLevel): Iterator[T] = {
 
-    val key = RDDBlockId(rdd.id, partition.stringId(rdd))
+    val key = partition.blockId(rdd)
     logDebug(s"Looking for partition $key")
     blockManager.get(key) match {
       case Some(blockResult) =>
@@ -96,7 +96,7 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
    * If the lock is free, just acquire it and return None. Otherwise, another thread is already
    * loading the partition, so we wait for it to finish and return the values loaded by the thread.
    */
-  private def acquireLockForPartition[T](id: RDDBlockId): Option[Iterator[T]] = {
+  private def acquireLockForPartition[T](id: BlockId): Option[Iterator[T]] = {
     loading.synchronized {
       if (!loading.contains(id)) {
         // If the partition is free, acquire its lock to compute its value
