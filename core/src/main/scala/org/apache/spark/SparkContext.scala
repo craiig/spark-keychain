@@ -297,9 +297,6 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
   // Keep track of all RDDS
   private[spark] val allRdds = new TimeStampedWeakValueHashMap[Int, RDD[_]]()
 
-  // Track partition ID to RDD
-  private[spark] val partitionToRDD = new TimeStampedWeakValueHashMap[String, (RDD[_], Partition)]()
-
   // Keeps track of all persisted RDDs
   private[spark] val persistentRdds = new TimeStampedWeakValueHashMap[Int, RDD[_]]
   private[spark] def metadataCleaner: MetadataCleaner = _metadataCleaner
@@ -2148,23 +2145,6 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
     allRdds(id) = rdd
     id
   }
-
-  /** Track Partition IDs and their corresponding RDDs */
-  def registerRddPartition( rdd:RDD[_], part:Partition) = {
-    //note that this will fail when we stop having a 1:1 relationship
-    //between RDDs and blocks
-    val partid:String = part.blockId(rdd).name
-    println(s"registered rdd:${rdd.id} block id: $partid");
-    println(rdd)
-    //if ( partitionToRDD.contains( partid ) ){
-      //throw new SparkException(s"Tried to register a duplicate block ID with SparkContext: $partid rdd.id: ${rdd.id}");
-    //} else {
-      //partitionToRDD( partid ) = ( rdd, part )
-    //}
-  }
-
-  def getRddPartByBlockId( partId:String ): (RDD[_], Partition) = 
-    partitionToRDD( partId )
 
   /**
    * Registers listeners specified in spark.extraListeners, then starts the listener bus.

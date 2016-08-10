@@ -427,7 +427,9 @@ private[spark] class MemoryStore(blockManager: BlockManager, memoryManager: Memo
     assert(space > 0)
     memoryManager.synchronized {
       var freedMemory = 0L
-      val rddToAdd = blockId.flatMap(getRddId)
+      //val rddToAdd = blockId.flatMap(getRddId)
+      val rddsToAdd:Set[Int] = blockId.map( blockManager.master.getRDDsUsingBlockId(_) ) getOrElse Set[Int]()
+
       val selectedBlocks = new ArrayBuffer[BlockId]
       // This is synchronized to ensure that the set of entries is not changed
       // (because of getValue or getBytes) while traversing the iterator, as that
@@ -437,7 +439,11 @@ private[spark] class MemoryStore(blockManager: BlockManager, memoryManager: Memo
         while (freedMemory < space && iterator.hasNext) {
           val pair = iterator.next()
           val blockId = pair.getKey
-          if (rddToAdd.isEmpty || rddToAdd != getRddId(blockId)) {
+          val evictedRDDs = blockManager.master.getRDDsUsingBlockId(blockId)
+          val potentialOverlap = (rddsToAdd & evictedRDDs) //return overlapping rdd sets or emptyset
+
+          //if (rddToAdd.isEmpty || rddToAdd != getRddId(blockId)) {
+          if ( potentialOverlap.isEmpty ) {
             selectedBlocks += blockId
             freedMemory += pair.getValue.size
           }

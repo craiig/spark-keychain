@@ -64,6 +64,20 @@ class BlockManagerMaster(
     logInfo("Added remote BlockManagerMaster")
   }
 
+  /** register an RDD ID to a block ID - called by the driver */
+  def registerRDDusingBlockId(blockId:BlockId, rddId: Int){
+    logInfo(s"registered rdd:${rddId} using block id: ${blockId.name}")
+    driverEndpoint.askWithRetry[Boolean]( RegisterRDDUsingBlockId(blockId, rddId) )
+  }
+  def deregisterRDDusingBlockId(blockId:BlockId, rddId: Int){
+    logInfo(s"deregistered rdd:${rddId} using block id: ${blockId.name}")
+    driverEndpoint.askWithRetry[Boolean]( DeregisterRDDUsingBlockId(blockId, rddId) )
+  }
+  /** find all RDD IDs using a block ID - called by executors */
+  def getRDDsUsingBlockId( blockId:BlockId ): Set[Int] = {
+    driverEndpoint.askWithRetry[Set[Int]]( GetRDDsUsingBlockId(blockId) )
+  }
+
   def updateBlockInfo(
       blockManagerId: BlockManagerId,
       blockId: BlockId,

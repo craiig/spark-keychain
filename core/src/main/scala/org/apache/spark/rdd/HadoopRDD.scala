@@ -66,7 +66,6 @@ private[spark] class HadoopPartition(rddId: Int, idx: Int, s: InputSplit)
     //= RDDUniqueBlockId( s"${this.getPipeEnvVars}")
     if (inputSplit.value.isInstanceOf[FileSplit]) {
       val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
-      println(s"blockId: ${is.getPath().toString()}")
       RDDUniqueBlockId(is.getPath().toString())
     } else {
       RDDBlockId(rdd.id, index)

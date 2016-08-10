@@ -238,7 +238,7 @@ abstract class RDD[T: ClassTag](
       if (partitions_ == null) {
         partitions_ = getPartitions
         partitions.foreach( (p) => {
-          sc.registerRddPartition( this, p );
+          sc.env.blockManager.master.registerRDDusingBlockId( p.blockId(this), this.id );
         })
       }
       partitions_

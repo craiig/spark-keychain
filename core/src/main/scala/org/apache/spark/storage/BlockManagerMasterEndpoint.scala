@@ -21,6 +21,7 @@ import java.util.{HashMap => JHashMap}
 
 import scala.util.{Failure, Success}
 import scala.collection.mutable
+import scala.collection.mutable.{HashMap, MultiMap}
 import scala.collection.JavaConverters._
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -136,6 +137,15 @@ class BlockManagerMasterEndpoint(
       }
       f.onSuccess { case response => context.reply(response) }
       f.onFailure { case t: Throwable => context.sendFailure(t) }
+
+    case GetRDDsUsingBlockId(blockId) =>
+      context.reply(getRDDsUsingBlockId(blockId))
+
+    case RegisterRDDUsingBlockId(blockId, rddId) =>
+      context.reply(registerRDDUsingBlockId(blockId, rddId))
+
+    case DeregisterRDDUsingBlockId(blockId, rddId) =>
+      context.reply(deregisterRDDUsingBlockId(blockId, rddId))
 
     case GetPeers(blockManagerId) =>
       context.reply(getPeers(blockManagerId))
@@ -518,6 +528,22 @@ class BlockManagerMasterEndpoint(
     } else {
       a
     }
+  }
+
+  // Track block IDs to RDDs
+  private val blockIdToRDD
+    = new HashMap[BlockId, scala.collection.mutable.Set[Int]] with MultiMap[BlockId, Int]
+
+  private def getRDDsUsingBlockId(blockId: BlockId): Set[Int] = {
+    blockIdToRDD.get(blockId).getOrElse( mutable.Set() ).toSet
+  }
+  private def registerRDDUsingBlockId(blockId: BlockId, rddId: Int): Boolean = {
+    blockIdToRDD.addBinding( blockId, rddId )
+    return true
+  }
+  private def deregisterRDDUsingBlockId(blockId: BlockId, rddId: Int): Boolean = {
+    blockIdToRDD.removeBinding(blockId, rddId)
+    return true
   }
 
   /** Get the list of the peers of the given block manager */

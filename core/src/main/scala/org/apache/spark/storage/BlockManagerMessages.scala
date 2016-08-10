@@ -119,6 +119,12 @@ private[spark] object BlockManagerMessages {
   case class GetLocationsMultipleBlockIds(blockIds: Array[BlockId], 
     remote: Boolean) extends ToBlockManagerMaster
 
+  case class GetRDDsUsingBlockId(blockId: BlockId) extends ToBlockManagerMaster
+  /* Driver -> Manager */
+  case class RegisterRDDUsingBlockId(blockId: BlockId, rddId: Int) extends ToBlockManagerMaster
+  /* Driver -> Manager */
+  case class DeregisterRDDUsingBlockId(blockId: BlockId, rddId: Int) extends ToBlockManagerMaster
+
   case class GetPeers(blockManagerId: BlockManagerId) extends ToBlockManagerMaster
 
   case class GetExecutorEndpointRef(executorId: String) extends ToBlockManagerMaster
