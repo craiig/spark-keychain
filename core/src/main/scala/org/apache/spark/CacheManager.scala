@@ -22,6 +22,7 @@ import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage._
+import org.apache.spark.util.Utils
 
 /**
  * Spark class responsible for passing RDDs partition contents to the BlockManager and making
@@ -66,10 +67,13 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
         // Otherwise, we have to load the partition ourselves
         try {
           logInfo(s"Partition $key not found, computing it")
+          val startTimeMs = System.currentTimeMillis
           val computedValues = rdd.computeOrReadCheckpoint(partition, context)
 
           // If the task is running locally, do not persist the result
           if (context.isRunningLocally) {
+            val tookTimeMs = Utils.getUsedTimeMs(startTimeMs)
+            logInfo(s"Partition $key computed and returned locally in $tookTimeMs")
             return computedValues
           }
 
@@ -79,6 +83,9 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
           val metrics = context.taskMetrics
           val lastUpdatedBlocks = metrics.updatedBlocks.getOrElse(Seq[(BlockId, BlockStatus)]())
           metrics.updatedBlocks = Some(lastUpdatedBlocks ++ updatedBlocks.toSeq)
+          val tookTimeMs = Utils.getUsedTimeMs(startTimeMs)
+          logInfo(s"Partition $key computed and cached in $tookTimeMs")
+
           new InterruptibleIterator(context, cachedValues)
 
         } finally {
