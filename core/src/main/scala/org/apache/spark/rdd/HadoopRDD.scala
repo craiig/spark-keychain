@@ -62,8 +62,6 @@ private[spark] class HadoopPartition(rddId: Int, idx: Int, s: InputSplit)
   override val index: Int = idx
 
   override def blockId( rdd:RDD[_] ): BlockId = {
-    //= RDDUniqueBlockId( s"${rdd.id}_$idx" )
-    //= RDDUniqueBlockId( s"${this.getPipeEnvVars}")
     if (inputSplit.value.isInstanceOf[FileSplit]) {
       val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
       RDDUniqueBlockId(is.getPath().toString())

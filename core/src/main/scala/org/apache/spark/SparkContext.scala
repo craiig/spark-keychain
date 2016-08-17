@@ -40,7 +40,7 @@ import org.apache.hadoop.io.{ArrayWritable, BooleanWritable, BytesWritable, Doub
   FloatWritable, IntWritable, LongWritable, NullWritable, Text, Writable}
 import org.apache.hadoop.mapred.{FileInputFormat, InputFormat, JobConf, SequenceFileInputFormat,
   TextInputFormat}
-import org.apache.hadoop.mapreduce.{InputFormat => NewInputFormat, Job => NewHadoopJob}
+import org.apache.hadoop.mapreduce.{InputFormat => NewInputFormat, Job => NewHadoopJob, InputSplit => NewInputSplit}
 import org.apache.hadoop.mapreduce.lib.input.{FileInputFormat => NewFileInputFormat}
 
 import org.apache.mesos.MesosNativeLibrary
@@ -1129,12 +1129,14 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
       conf: Configuration = hadoopConfiguration,
       fClass: Class[F],
       kClass: Class[K],
-      vClass: Class[V]): RDD[(K, V)] = withScope {
+      vClass: Class[V],
+      blockIdFunc: Option[(RDD[_], NewInputSplit) => BlockId] = None
+    ): RDD[(K, V)] = withScope {
     assertNotStopped()
     // Add necessary security credentials to the JobConf. Required to access secure HDFS.
     val jconf = new JobConf(conf)
     SparkHadoopUtil.get.addCredentials(jconf)
-    new NewHadoopRDD(this, fClass, kClass, vClass, jconf)
+    new NewHadoopRDD(this, fClass, kClass, vClass, jconf, blockIdFunc)
   }
 
   /** Get an RDD for a Hadoop SequenceFile with given key and value types.

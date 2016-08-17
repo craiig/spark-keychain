@@ -36,15 +36,24 @@ import org.apache.spark.rdd.NewHadoopRDD.NewHadoopMapPartitionsWithSplitRDD
 import org.apache.spark.util.{SerializableConfiguration, ShutdownHookManager}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.storage.StorageLevel
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class NewHadoopPartition(
     rddId: Int,
     val index: Int,
-    rawSplit: InputSplit with Writable)
+    rawSplit: InputSplit with Writable,
+    blockIdFunc: Option[(RDD[_], InputSplit) => BlockId] = None
+    )
   extends Partition {
 
   val serializableHadoopSplit = new SerializableWritable(rawSplit)
   override def hashCode(): Int = 41 * (41 + rddId) + index
+
+  override def blockId( rdd:RDD[_] ): BlockId = {
+    blockIdFunc.getOrElse((rdd:RDD[_], is:InputSplit) => {
+      RDDBlockId(rdd.id, index)
+    })( rdd, serializableHadoopSplit.value )
+  }
 }
 
 /**
@@ -66,7 +75,8 @@ class NewHadoopRDD[K, V](
     inputFormatClass: Class[_ <: InputFormat[K, V]],
     keyClass: Class[K],
     valueClass: Class[V],
-    @transient private val _conf: Configuration)
+    @transient private val _conf: Configuration,
+    blockIdFunc: Option[(RDD[_], InputSplit) => BlockId] = None)
   extends RDD[(K, V)](sc, Nil)
   with SparkHadoopMapReduceUtil
   with Logging {
@@ -120,7 +130,7 @@ class NewHadoopRDD[K, V](
     val rawSplits = inputFormat.getSplits(jobContext).toArray
     val result = new Array[Partition](rawSplits.size)
     for (i <- 0 until rawSplits.size) {
-      result(i) = new NewHadoopPartition(id, i, rawSplits(i).asInstanceOf[InputSplit with Writable])
+      result(i) = new NewHadoopPartition(id, i, rawSplits(i).asInstanceOf[InputSplit with Writable], blockIdFunc)
     }
     result
   }
