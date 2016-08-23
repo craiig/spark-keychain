@@ -1575,6 +1575,18 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
     println("}")
   }
 
+  def printBlockIDs: Unit = {
+    val blockids:Seq[(BlockId, Set[Int])]
+      = env.blockManager.master.getAllRDDsUsingBlockIds
+    for( (blockid, rdds) <- blockids ){
+      //println(s"BlockId: $blockid")
+      println(s"BlockId: '${blockid}")
+      for(r <- rdds.toSeq){
+        println(s"\trdd: $r")
+      }
+    }
+  }
+
   /**
    * :: DeveloperApi ::
    * Return information about blocks stored in all of the slaves

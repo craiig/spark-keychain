@@ -77,6 +77,9 @@ class BlockManagerMaster(
   def getRDDsUsingBlockId( blockId:BlockId ): Set[Int] = {
     driverEndpoint.askWithRetry[Set[Int]]( GetRDDsUsingBlockId(blockId) )
   }
+  def getAllRDDsUsingBlockIds(): Seq[(BlockId, Set[Int])] = {
+    driverEndpoint.askWithRetry[Seq[(BlockId, Set[Int])]]( GetAllRDDsUsingBlockIds() )
+  }
 
   def updateBlockInfo(
       blockManagerId: BlockManagerId,
