@@ -22,6 +22,7 @@ import org.apache.spark.mllib.linalg.{DenseVector, Vector}
 import org.apache.spark.mllib.random.RandomDataGenerator
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.Utils
+import org.apache.spark.storage.{BlockId, RDDUniqueBlockId}
 
 import scala.reflect.ClassTag
 import scala.util.Random
@@ -32,6 +33,14 @@ private[mllib] class RandomRDDPartition[T](override val index: Int,
     val seed: Long) extends Partition {
 
   require(size >= 0, "Non-negative partition size required.")
+
+  /* data is a function of the size, generator, and seed used
+   * we don't even need to include the partition index */
+  def uniquename:String = s"randomRDD_size=${size}_gen=${generator.getClass.getName}_seed=${seed}"
+
+  override def blockId(rdd:RDD[_]): BlockId = {
+    RDDUniqueBlockId(uniquename)
+  }
 }
 
 // These two classes are necessary since Range objects in Scala cannot have size > Int.MaxValue
