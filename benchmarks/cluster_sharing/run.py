@@ -74,8 +74,8 @@ class Mode1(object):
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         # Output folder
         self.folder = REPORTS_DIR + '/' + self.timestamp
-        # TODO: remove the test!
-        self.folder = REPORTS_DIR + '/2016-08-25_14-50-16'
+        # NEXT LINE IS FOR TESTING
+        # self.folder = REPORTS_DIR + '/2016-08-25_14-50-16'
         if not os.path.exists(REPORTS_DIR):
             os.makedirs(REPORTS_DIR)
         if not os.path.exists(self.folder):
@@ -192,5 +192,5 @@ class Mode1(object):
 if __name__ == '__main__':
     # Run cluster benchmark
     mode1 = Mode1(sys.argv[1])
-    # mode1.run()
+    mode1.run()
     mode1.report()
