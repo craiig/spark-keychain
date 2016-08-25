@@ -147,6 +147,9 @@ class BlockManagerMasterEndpoint(
     case DeregisterRDDUsingBlockId(blockId, rddId) =>
       context.reply(deregisterRDDUsingBlockId(blockId, rddId))
 
+    case GetAllRDDsUsingBlockIds() =>
+      context.reply(getAllRDDsUsingBlockIds)
+
     case GetPeers(blockManagerId) =>
       context.reply(getPeers(blockManagerId))
 
@@ -545,6 +548,7 @@ class BlockManagerMasterEndpoint(
     blockIdToRDD.removeBinding(blockId, rddId)
     return true
   }
+  private def getAllRDDsUsingBlockIds = blockIdToRDD.toSeq
 
   /** Get the list of the peers of the given block manager */
   private def getPeers(blockManagerId: BlockManagerId): Seq[BlockManagerId] = {

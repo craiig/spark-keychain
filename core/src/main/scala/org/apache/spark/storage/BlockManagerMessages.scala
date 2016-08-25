@@ -124,6 +124,7 @@ private[spark] object BlockManagerMessages {
   case class RegisterRDDUsingBlockId(blockId: BlockId, rddId: Int) extends ToBlockManagerMaster
   /* Driver -> Manager */
   case class DeregisterRDDUsingBlockId(blockId: BlockId, rddId: Int) extends ToBlockManagerMaster
+  case class GetAllRDDsUsingBlockIds() extends ToBlockManagerMaster
 
   case class GetPeers(blockManagerId: BlockManagerId) extends ToBlockManagerMaster
 

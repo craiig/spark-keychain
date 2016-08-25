@@ -19,7 +19,19 @@ package org.apache.spark.rdd
 
 import scala.reflect.ClassTag
 
-import org.apache.spark.{Partition, TaskContext}
+import org.apache.spark.{Partition, TaskContext, SparkContext}
+import org.apache.commons.codec.binary.Base64
+import org.apache.spark.storage.{BlockId, RDDUniqueBlockId}
+
+private[spark] class MapPartition(val prev: Partition, val funcStr:String)
+  extends Partition {
+  override val index: Int = prev.index
+  override def blockId(rdd:RDD[_]): BlockId = {
+    /* how does this interact with the partitioner? */
+   val str = s"${prev.blockId(rdd)}_map_${funcStr}"
+   RDDUniqueBlockId(str) 
+  }
+}
 
 /**
  * An RDD that applies the provided function to every partition of the parent RDD.
@@ -30,12 +42,20 @@ private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
     preservesPartitioning: Boolean = false)
   extends RDD[U](prev) {
 
+    val f_serialized = {
+      val ser = SparkContext.getOrCreate().env.serializer.newInstance()
+      val funcBytes = ser.serialize(f)
+      val funcStr = Base64.encodeBase64String(funcBytes.array)
+      logInfo(s"serialized function of size ${funcBytes.limit} bytes, base64 encoded is ${funcStr.length} bytes")
+      funcStr
+    }
+
   override val partitioner = if (preservesPartitioning) firstParent[T].partitioner else None
 
-  override def getPartitions: Array[Partition] = firstParent[T].partitions
+  override def getPartitions: Array[Partition] = firstParent[T].partitions.map( p => new MapPartition(p, f_serialized) )
 
   override def compute(split: Partition, context: TaskContext): Iterator[U] =
-    f(context, split.index, firstParent[T].iterator(split, context))
+    f(context, split.index, firstParent[T].iterator(split.asInstanceOf[MapPartition].prev, context))
 
   override def clearDependencies() {
     super.clearDependencies()
