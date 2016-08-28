@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!venv/bin/python
 import os
 import sys
 from subprocess import Popen, PIPE
@@ -6,6 +6,8 @@ import re
 from datetime import datetime
 import matplotlib.pyplot as plt
 import numpy as np
+from collections import Counter
+import pandas as pd
 
 
 REPORTS_DIR = 'webserver/docs/reports'
@@ -51,13 +53,69 @@ def get_runtime(filename):
     matches = re.findall(time_pattern, log)
     start, end = matches[0], matches[-1]
     FMT = '%y/%m/%d %H:%M:%S'
-    # today = datetime.today()
-    # print today.strftime(FMT)
     # Get time difference
     time_diff = datetime.strptime(end, FMT) - datetime.strptime(start, FMT)
     # Convert timediff to seconds
     print start, end
     return time_diff.seconds
+
+
+def get_rdd_sizes(filename):
+    '''
+    Return a dictionary of
+    {rdd_name:rdd_size_in_bytes}
+    '''
+    log = None
+    with open(filename) as f:
+        log = '\n'.join(f.readlines())
+    # Rdd size pattern
+    rdd_size_pattern = 'MemoryStore: Block (rdd_[0-9]+_[0-9]+)\s.*estimated size\s([0-9]*[.][0-9]*\s.*),'
+    matches = [m.groups() for m in re.finditer(rdd_size_pattern, log)]
+    # Convert all sizes to B
+    sizes = {}  # {rdd_name:rdd_size_in_bytes}
+    for rdd_name, size in matches:
+        size_without_unit, unit = size.split()
+        # Convert size to Bytes
+        if unit == 'KB':
+            size_without_unit *= 1000
+        elif unit == 'MB':
+            size_without_unit *= 1000000
+        elif unit == 'GB':
+            size_without_unit *= 1000000000
+        # Put in dictionary
+        sizes[rdd_name] = int(float(size_without_unit))
+
+    return sizes
+
+
+def get_rdd_hits(filename):
+    '''
+    Return a dictionary of
+    {rdd_name:hits_for_this_rdd}
+    '''
+    log = None
+    with open(filename) as f:
+        log = '\n'.join(f.readlines())
+    # Rdd hit pattern
+    rdd_hit_pattern = 'BlockManager: Found block (rdd_[0-9]+_[0-9]+)\s'
+    matches = [m.groups()[0] for m in re.finditer(rdd_hit_pattern, log)]
+    rdd_hits = Counter(matches)
+    return rdd_hits
+
+
+def get_rdd_misses(filename):
+    '''
+    Return a dictionary of
+    {rdd_name:misses_for_this_rdd}
+    '''
+    log = None
+    with open(filename) as f:
+        log = '\n'.join(f.readlines())
+    # Rdd hit pattern
+    rdd_miss_pattern = 'CacheManager: Partition (rdd_[0-9]+_[0-9]+) not found,'
+    matches = [m.groups()[0] for m in re.finditer(rdd_miss_pattern, log)]
+    rdd_misses = Counter(matches)
+    return rdd_misses
 
 
 def get_code(filename):
@@ -75,7 +133,7 @@ class Mode1(object):
         # Output folder
         self.folder = REPORTS_DIR + '/' + self.timestamp
         # NEXT LINE IS FOR TESTING
-        # self.folder = REPORTS_DIR + '/2016-08-25_14-50-16'
+        # self.folder = REPORTS_DIR + '/2016-08-27_12-29-44'
         if not os.path.exists(REPORTS_DIR):
             os.makedirs(REPORTS_DIR)
         if not os.path.exists(self.folder):
@@ -137,19 +195,114 @@ class Mode1(object):
         print 'First runtime:\t', first_runtime
         print 'Second runtime:\t', second_runtime
 
-        # Plot
+        # Runtime Plot
         x = ['First Run', 'Second Run']
         y = [first_runtime, second_runtime]
         x_pos = np.arange(len(x))
         # lightskyblue
-        plt.barh(x_pos, y, height=0.5, align='center', color='cornflowerblue')
+        plt.barh(x_pos, y, align='center', color='cornflowerblue')
         plt.yticks(x_pos, x)
         plt.xlabel('Seconds')
         plt.title('Runtime Analysis')
         png_path = '{}/runtime.png'.format(self.folder)
+        plt.tight_layout()
+        plt.axis('tight')
         plt.savefig(png_path)
-        # plt.show()
+        plt.close()
 
+        # RDD Sizes plot
+        plt.figure(1, [10, 30])
+        rdd_sizes = get_rdd_sizes('{}/run1_stdout.txt'.format(self.folder))
+        x = rdd_sizes.keys()
+        y = rdd_sizes.values()
+        x_pos = np.arange(len(x))
+        # lightskyblue
+        plt.barh(x_pos, y, align='center', color='cornflowerblue')
+        plt.yticks(x_pos, x)
+        plt.xlabel('Bytes')
+        plt.title('RDD Sizes')
+        png_path = '{}/rdd_sizes.png'.format(self.folder)
+        plt.tight_layout()
+        plt.axis('tight')
+        plt.savefig(png_path)
+        plt.close()
+
+        # RDD Hits
+        plt.figure(1, [10, 30])
+        rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
+        run1_rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
+        run2_rdd_hits = get_rdd_hits('{}/run2_stdout.txt'.format(self.folder))
+        x = rdd_hits.keys()
+        y = rdd_hits.values()
+        x_pos = np.arange(len(x))
+        # lightskyblue
+        plt.barh(x_pos, y, align='center', color='cornflowerblue')
+        plt.yticks(x_pos, x)
+        plt.xlabel('Count')
+        plt.title('RDD Hits')
+        png_path = '{}/rdd_hits.png'.format(self.folder)
+        plt.tight_layout()
+        plt.axis('tight')
+        plt.savefig(png_path)
+        plt.close()
+
+        # RDD Hits (table)
+        raw_data = {'rdd_name': rdd_hits.keys(),
+                    'Hits': rdd_hits.values()}
+        df = pd.DataFrame(raw_data)
+        df = df.set_index('rdd_name')
+        rdd_hits_html = df.to_html()
+
+        # RDD Misses
+        plt.figure(1, [10, 30])
+        rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
+        run1_rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
+        run2_rdd_misses = get_rdd_misses('{}/run2_stdout.txt'.format(self.folder))
+        x = rdd_misses.keys()
+        y = rdd_misses.values()
+        x_pos = np.arange(len(x))
+        # lightskyblue
+        plt.barh(x_pos, y, align='center', color='cornflowerblue')
+        plt.yticks(x_pos, x)
+        plt.xlabel('Count')
+        plt.title('RDD Misses')
+        png_path = '{}/rdd_misses.png'.format(self.folder)
+        plt.tight_layout()
+        plt.axis('tight')
+        plt.savefig(png_path)
+        plt.close()
+
+        # RDD Overall Hit/Miss ratio
+        plt.figure(1)
+        run1_hits = sum(run1_rdd_hits.values())
+        run2_hits = sum(run2_rdd_hits.values())
+        run1_misses = sum(run1_rdd_misses.values())
+        run2_misses = sum(run2_rdd_misses.values())
+        x = ['Hit', 'Miss']
+        y = [run1_hits, run1_misses]
+        pos = np.arange(len(x))
+        width = 0.25
+        # lightskyblue
+        ticks = [p + width for p in pos]
+        plt.barh(ticks, y, height=0.25, align='center', color='cornflowerblue')
+        plt.yticks(ticks, x)
+
+        y = [run2_hits, run2_misses]
+        ticks = [p + width*2 for p in pos]
+        plt.barh(ticks, y, height=0.25, align='center', color='cornflowerblue')
+
+        plt.xlabel('Count')
+        #plt.title('RDD Overall Hits/Misses (Ratio= {})'.format(float(hits)/misses))
+        png_path = '{}/rdd_overall_hit_miss_ratio.png'.format(self.folder)
+        plt.tight_layout()
+        plt.axis('tight')
+        plt.savefig(png_path)
+        plt.close()
+
+        y = [run1_hits, run1_misses]
+        print y
+        y = [run2_hits, run2_misses]
+        print y
         # Get code
         code = get_code(self.code_path)
         # Shift code by two tabs
@@ -184,7 +337,29 @@ class Mode1(object):
         output.append('## Runtime Analysis\n')
         output.append('![](runtime.png)\n')
 
-        # Write to file
+        # RDD Sizes
+        output.append('## RDD Sizes\n')
+        output.append('- RDD sizes of first run.\n\n')
+        output.append('![](rdd_sizes.png)\n')
+
+        # RDD Hits
+        output.append('## RDD Hits\n')
+        output.append('![](rdd_hits.png)\n')
+        output.append('\n')
+        output.append(rdd_hits_html)
+        output.append('\n')
+        output.append(df.describe().to_html())
+        output.append('\n')
+
+        # RDD Misses
+        output.append('## RDD Misses\n')
+        output.append('![](rdd_misses.png)\n')
+
+        # Overall RDD Hit/Miss Ratio
+        output.append('## Overall RDD Hit/Miss Ratio\n')
+        output.append('![](rdd_overall_hit_miss_ratio.png)\n')
+
+       # Write to file
         with open('{}/report.markdown'.format(self.folder), 'w') as f:
             f.write(''.join(output))
 
