@@ -1,7 +1,7 @@
 #!venv/bin/python
 import os
 import sys
-from subprocess import Popen, PIPE
+from subprocess import Popen, PIPE, STDOUT
 import re
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -11,6 +11,7 @@ import pandas as pd
 
 
 REPORTS_DIR = 'webserver/docs/reports'
+SPARK_SHELL = '/home/aziz/spark-1.6.3-SNAPSHOT-bin-craig-sharingONLYLEAF/bin/spark-shell'
 
 
 def get_block_manager_url(stdout):
@@ -73,8 +74,10 @@ def get_rdd_sizes(filename):
     matches = [m.groups() for m in re.finditer(rdd_size_pattern, log)]
     # Convert all sizes to B
     sizes = {}  # {rdd_name:rdd_size_in_bytes}
+    print matches
     for rdd_name, size in matches:
         size_without_unit, unit = size.split()
+        size_without_unit = float(size_without_unit)
         # Convert size to Bytes
         if unit == 'KB':
             size_without_unit *= 1000
@@ -83,7 +86,7 @@ def get_rdd_sizes(filename):
         elif unit == 'GB':
             size_without_unit *= 1000000000
         # Put in dictionary
-        sizes[rdd_name] = int(float(size_without_unit))
+        sizes[rdd_name] = int(size_without_unit)
 
     return sizes
 
@@ -125,6 +128,18 @@ def get_code(filename):
     return code
 
 
+def plot_bar(df=None, categories=None, values=None, title=None, folder=None):
+    from bokeh.charts import Bar, output_file, show, save
+
+    p = Bar(df, categories, values=values, title=title)
+
+    html_file = 'bar.html'
+    output_file('{}/{}'.format(folder, html_file))
+    save(p)
+    iframe_tag = '<iframe src ="../{}" width="800" height="650" frameBorder="0"></iframe>\n'.format(html_file)
+    return html_file, iframe_tag
+
+
 class Mode1(object):
 
     def __init__(self, code_path):
@@ -133,7 +148,8 @@ class Mode1(object):
         # Output folder
         self.folder = REPORTS_DIR + '/' + self.timestamp
         # NEXT LINE IS FOR TESTING
-        # self.folder = REPORTS_DIR + '/2016-08-27_12-29-44'
+        self.folder = REPORTS_DIR + '/2016-08-27_12-29-44'
+        # self.folder = REPORTS_DIR + '/2016-08-27_18-40-05'
         if not os.path.exists(REPORTS_DIR):
             os.makedirs(REPORTS_DIR)
         if not os.path.exists(self.folder):
@@ -153,12 +169,13 @@ class Mode1(object):
         benchmark = self.code_path
         # Run first spark shell
         p1 = Popen(
-            ['../../bin/spark-shell'],
+            ['mkdir -p shell1; cd shell1; '+SPARK_SHELL],
             stdout=PIPE,
             stdin=PIPE,
-            stderr=PIPE)
+            stderr=STDOUT,
+            bufsize=0, shell=True)
         cmd = ['println("BlockManagerURL: " + sc.getBlockManagerMasterURL)',
-               ':load {}'.format(benchmark),
+               ':load ../{}'.format(benchmark),
                'println("Exit Program")']
         # Send command
         send_command(p1, cmd)
@@ -172,12 +189,13 @@ class Mode1(object):
 
         # Run second spark shell
         p2 = Popen(
-            ['../../bin/spark-shell'],
+            ['mkdir -p shell2; cd shell2; '+SPARK_SHELL],
             stdout=PIPE,
             stdin=PIPE,
-            stderr=PIPE)
+            stderr=STDOUT,
+            bufsize=0, shell=True)
         cmd = ['sc.addRemoteBlockManagerMaster("{}")'.format(url),
-               ':load {}'.format(benchmark),
+               ':load ../{}'.format(benchmark),
                'println("Exit Program")']
 
         # Send command
@@ -211,7 +229,7 @@ class Mode1(object):
         plt.close()
 
         # RDD Sizes plot
-        plt.figure(1, [10, 30])
+        plt.figure(1)
         rdd_sizes = get_rdd_sizes('{}/run1_stdout.txt'.format(self.folder))
         x = rdd_sizes.keys()
         y = rdd_sizes.values()
@@ -228,7 +246,8 @@ class Mode1(object):
         plt.close()
 
         # RDD Hits
-        plt.figure(1, [10, 30])
+        plt.figure(1)
+        # plt.figure(1, [10, 30])
         rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
         run1_rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
         run2_rdd_hits = get_rdd_hits('{}/run2_stdout.txt'.format(self.folder))
@@ -243,7 +262,7 @@ class Mode1(object):
         png_path = '{}/rdd_hits.png'.format(self.folder)
         plt.tight_layout()
         plt.axis('tight')
-        plt.savefig(png_path)
+        plt.savefig(png_path, bbox_inches='tight')
         plt.close()
 
         # RDD Hits (table)
@@ -254,7 +273,7 @@ class Mode1(object):
         rdd_hits_html = df.to_html()
 
         # RDD Misses
-        plt.figure(1, [10, 30])
+        plt.figure(1)
         rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
         run1_rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
         run2_rdd_misses = get_rdd_misses('{}/run2_stdout.txt'.format(self.folder))
@@ -283,14 +302,15 @@ class Mode1(object):
         pos = np.arange(len(x))
         width = 0.25
         # lightskyblue
-        ticks = [p + width for p in pos]
-        plt.barh(ticks, y, height=0.25, align='center', color='cornflowerblue')
+        ticks = [p + width*2 for p in pos]
+        b1 = plt.barh(ticks, y, height=0.25, align='center', color='black')
         plt.yticks(ticks, x)
 
         y = [run2_hits, run2_misses]
-        ticks = [p + width*2 for p in pos]
-        plt.barh(ticks, y, height=0.25, align='center', color='cornflowerblue')
+        ticks = [p + width for p in pos]
+        b2 = plt.barh(ticks, y, height=0.25, align='center', color='brown')
 
+        plt.legend([b1[0], b2[0]], ['Run1', 'Run2'])
         plt.xlabel('Count')
         #plt.title('RDD Overall Hits/Misses (Ratio= {})'.format(float(hits)/misses))
         png_path = '{}/rdd_overall_hit_miss_ratio.png'.format(self.folder)
@@ -299,10 +319,6 @@ class Mode1(object):
         plt.savefig(png_path)
         plt.close()
 
-        y = [run1_hits, run1_misses]
-        print y
-        y = [run2_hits, run2_misses]
-        print y
         # Get code
         code = get_code(self.code_path)
         # Shift code by two tabs
@@ -359,6 +375,20 @@ class Mode1(object):
         output.append('## Overall RDD Hit/Miss Ratio\n')
         output.append('![](rdd_overall_hit_miss_ratio.png)\n')
 
+        # TEST Bokeh RDD Hits
+        output.append('## Bokeh\n')
+        # Create Dataframe
+        data = {'rdd_name': rdd_hits.keys(),
+                'Hits': rdd_hits.values()}
+        run1_rdd_hits_df = pd.DataFrame(data)
+        # Table
+        run1_rdd_hits_html = df.to_html()
+        # Plot
+        html_file, iframe_tag = plot_bar(df=run1_rdd_hits_df, categories='rdd_name', values='Hits', title='RDD Hits', folder=self.folder)
+        output.append(iframe_tag)
+        # Table
+        output.append(df.to_html()+'\n')
+
        # Write to file
         with open('{}/report.markdown'.format(self.folder), 'w') as f:
             f.write(''.join(output))
@@ -367,5 +397,5 @@ class Mode1(object):
 if __name__ == '__main__':
     # Run cluster benchmark
     mode1 = Mode1(sys.argv[1])
-    mode1.run()
+    # mode1.run()
     mode1.report()
