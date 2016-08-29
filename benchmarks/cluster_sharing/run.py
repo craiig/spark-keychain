@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from collections import Counter
 import pandas as pd
+from bokeh.charts import Bar, output_file, show, save
+from bokeh.charts.operations import blend
 
 
 REPORTS_DIR = 'webserver/docs/reports'
@@ -26,11 +28,18 @@ def get_block_manager_url(stdout):
 
 
 def send_command(process, cmd):
+    '''
+    Sends cmd to child process
+    '''
     process.stdin.write('\n'.join(cmd)+'\n')
     process.stdin.flush()
 
 
 def receive_output(process):
+    '''
+    Prints out the STDOUT of given process,
+    and returns a list of the STDOUT lines
+    '''
     stdout = []
     while True:
         output = process.stdout.readline()
@@ -46,6 +55,9 @@ def receive_output(process):
 
 
 def get_runtime(filename):
+    '''
+    Returns runtime in seconds
+    '''
     log = None
     with open(filename) as f:
         log = '\n'.join(f.readlines())
@@ -57,7 +69,6 @@ def get_runtime(filename):
     # Get time difference
     time_diff = datetime.strptime(end, FMT) - datetime.strptime(start, FMT)
     # Convert timediff to seconds
-    print start, end
     return time_diff.seconds
 
 
@@ -74,7 +85,6 @@ def get_rdd_sizes(filename):
     matches = [m.groups() for m in re.finditer(rdd_size_pattern, log)]
     # Convert all sizes to B
     sizes = {}  # {rdd_name:rdd_size_in_bytes}
-    print matches
     for rdd_name, size in matches:
         size_without_unit, unit = size.split()
         size_without_unit = float(size_without_unit)
@@ -128,16 +138,42 @@ def get_code(filename):
     return code
 
 
-def plot_bar(df=None, categories=None, values=None, title=None, folder=None):
-    from bokeh.charts import Bar, output_file, show, save
+def get_css_style():
+    return '''<style> table {
+    border-collapse: collapse;
+    width: 100%;
+    }
+    th, td {
+    text-align: left;
+    padding: 8px;
+    }
+    tr:nth-child(even){background-color: #f2f2f2}
+    </style>'''
 
-    p = Bar(df, categories, values=values, title=title)
+def plot_bar(df=None, categories=None, values=None, title=None,
+             folder=None, group=None, agg=None):
 
-    html_file = 'bar.html'
+    kwargs = {}
+    if group:
+        kwargs['group'] = group
+        kwargs['color'] = None
+    else:
+        kwargs['color'] = 'wheat'
+
+    if agg:
+        kwargs['agg'] = agg
+
+    p = Bar(df, categories, values=values, title=title, bar_width=0.5, **kwargs)
+
+    html_file = title.lower().replace(' ', '_')+'.html'
     output_file('{}/{}'.format(folder, html_file))
     save(p)
+    return html_file
+
+
+def get_iframe_tag(html_file):
     iframe_tag = '<iframe src ="../{}" width="800" height="650" frameBorder="0"></iframe>\n'.format(html_file)
-    return html_file, iframe_tag
+    return iframe_tag
 
 
 class Mode1(object):
@@ -148,8 +184,8 @@ class Mode1(object):
         # Output folder
         self.folder = REPORTS_DIR + '/' + self.timestamp
         # NEXT LINE IS FOR TESTING
-        self.folder = REPORTS_DIR + '/2016-08-27_12-29-44'
-        # self.folder = REPORTS_DIR + '/2016-08-27_18-40-05'
+        # self.folder = REPORTS_DIR + '/2016-08-27_12-29-44'
+        self.folder = REPORTS_DIR + '/2016-08-27_18-40-05'
         if not os.path.exists(REPORTS_DIR):
             os.makedirs(REPORTS_DIR)
         if not os.path.exists(self.folder):
@@ -207,125 +243,8 @@ class Mode1(object):
             f.write('\n'.join(stdout))
 
     def report(self):
-        # Example: runtime
-        first_runtime = get_runtime('{}/run1_stdout.txt'.format(self.folder))
-        second_runtime = get_runtime('{}/run2_stdout.txt'.format(self.folder))
-        print 'First runtime:\t', first_runtime
-        print 'Second runtime:\t', second_runtime
-
-        # Runtime Plot
-        x = ['First Run', 'Second Run']
-        y = [first_runtime, second_runtime]
-        x_pos = np.arange(len(x))
-        # lightskyblue
-        plt.barh(x_pos, y, align='center', color='cornflowerblue')
-        plt.yticks(x_pos, x)
-        plt.xlabel('Seconds')
-        plt.title('Runtime Analysis')
-        png_path = '{}/runtime.png'.format(self.folder)
-        plt.tight_layout()
-        plt.axis('tight')
-        plt.savefig(png_path)
-        plt.close()
-
-        # RDD Sizes plot
-        plt.figure(1)
-        rdd_sizes = get_rdd_sizes('{}/run1_stdout.txt'.format(self.folder))
-        x = rdd_sizes.keys()
-        y = rdd_sizes.values()
-        x_pos = np.arange(len(x))
-        # lightskyblue
-        plt.barh(x_pos, y, align='center', color='cornflowerblue')
-        plt.yticks(x_pos, x)
-        plt.xlabel('Bytes')
-        plt.title('RDD Sizes')
-        png_path = '{}/rdd_sizes.png'.format(self.folder)
-        plt.tight_layout()
-        plt.axis('tight')
-        plt.savefig(png_path)
-        plt.close()
-
-        # RDD Hits
-        plt.figure(1)
-        # plt.figure(1, [10, 30])
-        rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
-        run1_rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
-        run2_rdd_hits = get_rdd_hits('{}/run2_stdout.txt'.format(self.folder))
-        x = rdd_hits.keys()
-        y = rdd_hits.values()
-        x_pos = np.arange(len(x))
-        # lightskyblue
-        plt.barh(x_pos, y, align='center', color='cornflowerblue')
-        plt.yticks(x_pos, x)
-        plt.xlabel('Count')
-        plt.title('RDD Hits')
-        png_path = '{}/rdd_hits.png'.format(self.folder)
-        plt.tight_layout()
-        plt.axis('tight')
-        plt.savefig(png_path, bbox_inches='tight')
-        plt.close()
-
-        # RDD Hits (table)
-        raw_data = {'rdd_name': rdd_hits.keys(),
-                    'Hits': rdd_hits.values()}
-        df = pd.DataFrame(raw_data)
-        df = df.set_index('rdd_name')
-        rdd_hits_html = df.to_html()
-
-        # RDD Misses
-        plt.figure(1)
-        rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
-        run1_rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
-        run2_rdd_misses = get_rdd_misses('{}/run2_stdout.txt'.format(self.folder))
-        x = rdd_misses.keys()
-        y = rdd_misses.values()
-        x_pos = np.arange(len(x))
-        # lightskyblue
-        plt.barh(x_pos, y, align='center', color='cornflowerblue')
-        plt.yticks(x_pos, x)
-        plt.xlabel('Count')
-        plt.title('RDD Misses')
-        png_path = '{}/rdd_misses.png'.format(self.folder)
-        plt.tight_layout()
-        plt.axis('tight')
-        plt.savefig(png_path)
-        plt.close()
-
-        # RDD Overall Hit/Miss ratio
-        plt.figure(1)
-        run1_hits = sum(run1_rdd_hits.values())
-        run2_hits = sum(run2_rdd_hits.values())
-        run1_misses = sum(run1_rdd_misses.values())
-        run2_misses = sum(run2_rdd_misses.values())
-        x = ['Hit', 'Miss']
-        y = [run1_hits, run1_misses]
-        pos = np.arange(len(x))
-        width = 0.25
-        # lightskyblue
-        ticks = [p + width*2 for p in pos]
-        b1 = plt.barh(ticks, y, height=0.25, align='center', color='black')
-        plt.yticks(ticks, x)
-
-        y = [run2_hits, run2_misses]
-        ticks = [p + width for p in pos]
-        b2 = plt.barh(ticks, y, height=0.25, align='center', color='brown')
-
-        plt.legend([b1[0], b2[0]], ['Run1', 'Run2'])
-        plt.xlabel('Count')
-        #plt.title('RDD Overall Hits/Misses (Ratio= {})'.format(float(hits)/misses))
-        png_path = '{}/rdd_overall_hit_miss_ratio.png'.format(self.folder)
-        plt.tight_layout()
-        plt.axis('tight')
-        plt.savefig(png_path)
-        plt.close()
-
-        # Get code
-        code = get_code(self.code_path)
-        # Shift code by two tabs
-        code = map(lambda line: '\t\t' + line, code)
-
         # Headline
-        output = []
+        output = [get_css_style() + '\n']
         output.append('# Mode1 Run\n')
 
         # Timestamp
@@ -338,6 +257,11 @@ class Mode1(object):
         output.append('\n')
 
         # Code
+        # Get code
+        code = get_code(self.code_path)
+        # Shift code by two tabs
+        code = map(lambda line: '\t\t' + line, code)
+        # Report 
         output.append('## Code\n')
         output.append('- This test runs **{}**:\n\n'.format(
             self.code_path.split('/')[-1]))
@@ -350,46 +274,109 @@ class Mode1(object):
         output.append('- [Second Run Stdout](run2_stdout.txt)\n')
 
         # Runtime
-        output.append('## Runtime Analysis\n')
-        output.append('![](runtime.png)\n')
+        # Create Dataframe
+        run1_runtime = get_runtime('{}/run1_stdout.txt'.format(self.folder))
+        run2_runtime = get_runtime('{}/run2_stdout.txt'.format(self.folder))
+        data = {'Run': ['Run 1', 'Run 2'],
+                'Time': [run1_runtime, run2_runtime]}
+        runs_runtime_df = pd.DataFrame(data)
+        # Plot
+        runs_runtime_plot = plot_bar(df=runs_runtime_df, categories='Run',
+                values='Time', title='Runtime', folder=self.folder)
+        # Report 
+        output.append('## Runtime\n')
+        output.append(get_iframe_tag(runs_runtime_plot))
+        output.append(runs_runtime_df.to_html()+'\n')
 
-        # RDD Sizes
+
+        # RDD sizes
+        # Create Dataframe
+        run1_rdd_sizes = get_rdd_sizes('{}/run1_stdout.txt'.format(self.folder))
+        run2_rdd_sizes = get_rdd_sizes('{}/run2_stdout.txt'.format(self.folder))
+        run1_data = {'Run': 'Run 1',
+                     'rdd_name': run1_rdd_sizes.keys(),
+                     'sizes': run1_rdd_sizes.values()}
+        run2_data = {'Run': 'Run 2',
+                     'rdd_name': run2_rdd_sizes.keys(),
+                     'sizes': run2_rdd_sizes.values()}
+        run1_rdd_sizes_df = pd.DataFrame(run1_data)
+        run2_rdd_sizes_df = pd.DataFrame(run2_data)
+        runs_rdd_sizes_df = run1_rdd_sizes_df.append(run2_rdd_sizes_df, ignore_index=True)
+        # Plot
+        runs_rdd_sizes_plot = plot_bar(df=runs_rdd_sizes_df, categories='rdd_name',
+                values='sizes', title='RDD sizes', group='Run', folder=self.folder)
+        # Report 
         output.append('## RDD Sizes\n')
-        output.append('- RDD sizes of first run.\n\n')
-        output.append('![](rdd_sizes.png)\n')
+        output.append(get_iframe_tag(runs_rdd_sizes_plot))
+        output.append(runs_rdd_sizes_df.to_html()+'\n')
+
 
         # RDD Hits
+        # Create Dataframe
+        run1_rdd_hits = get_rdd_hits('{}/run1_stdout.txt'.format(self.folder))
+        run2_rdd_hits = get_rdd_hits('{}/run2_stdout.txt'.format(self.folder))
+        run1_data = {'Run': 'Run 1',
+                     'rdd_name': run1_rdd_hits.keys(),
+                     'hits': run1_rdd_hits.values()}
+        run2_data = {'Run': 'Run 2',
+                     'rdd_name': run2_rdd_hits.keys(),
+                     'hits': run2_rdd_hits.values()}
+        run1_rdd_hits_df = pd.DataFrame(run1_data)
+        run2_rdd_hits_df = pd.DataFrame(run2_data)
+        runs_rdd_hits_df = run1_rdd_hits_df.append(run2_rdd_hits_df, ignore_index=True)
+        # Plot
+        runs_rdd_hits_plot = plot_bar(df=runs_rdd_hits_df, categories='rdd_name',
+                values='hits', title='RDD Hits', group='Run', folder=self.folder)
+        # Report 
         output.append('## RDD Hits\n')
-        output.append('![](rdd_hits.png)\n')
-        output.append('\n')
-        output.append(rdd_hits_html)
-        output.append('\n')
-        output.append(df.describe().to_html())
-        output.append('\n')
+        output.append(get_iframe_tag(runs_rdd_hits_plot))
+        output.append(runs_rdd_hits_df.to_html()+'\n')
+
 
         # RDD Misses
-        output.append('## RDD Misses\n')
-        output.append('![](rdd_misses.png)\n')
-
-        # Overall RDD Hit/Miss Ratio
-        output.append('## Overall RDD Hit/Miss Ratio\n')
-        output.append('![](rdd_overall_hit_miss_ratio.png)\n')
-
-        # TEST Bokeh RDD Hits
-        output.append('## Bokeh\n')
         # Create Dataframe
-        data = {'rdd_name': rdd_hits.keys(),
-                'Hits': rdd_hits.values()}
-        run1_rdd_hits_df = pd.DataFrame(data)
-        # Table
-        run1_rdd_hits_html = df.to_html()
+        run1_rdd_misses = get_rdd_misses('{}/run1_stdout.txt'.format(self.folder))
+        run2_rdd_misses = get_rdd_misses('{}/run2_stdout.txt'.format(self.folder))
+        run1_data = {'Run': 'Run 1',
+                     'rdd_name': run1_rdd_misses.keys(),
+                     'misses': run1_rdd_misses.values()}
+        run2_data = {'Run': 'Run 2',
+                     'rdd_name': run2_rdd_misses.keys(),
+                     'misses': run2_rdd_misses.values()}
+        run1_rdd_misses_df = pd.DataFrame(run1_data)
+        run2_rdd_misses_df = pd.DataFrame(run2_data)
+        runs_rdd_misses_df = run1_rdd_misses_df.append(run2_rdd_misses_df, ignore_index=True)
         # Plot
-        html_file, iframe_tag = plot_bar(df=run1_rdd_hits_df, categories='rdd_name', values='Hits', title='RDD Hits', folder=self.folder)
-        output.append(iframe_tag)
-        # Table
-        output.append(df.to_html()+'\n')
+        runs_rdd_misses_plot = plot_bar(df=runs_rdd_misses_df, categories='rdd_name',
+                values='misses', title='RDD misses', group='Run', folder=self.folder)
+        # Report 
+        output.append('## RDD Misses\n')
+        output.append(get_iframe_tag(runs_rdd_misses_plot))
+        output.append(runs_rdd_misses_df.to_html()+'\n')
 
-       # Write to file
+        # RDD Overall Hit/Miss Ratio
+        # Create Dataframe
+        run1_data = {'Run': 'Run 1',
+                     'hits': [sum(run1_rdd_hits.values())],
+                     'misses': [sum(run1_rdd_misses.values())],
+                     'ratio': [float(sum(run1_rdd_hits.values()))/sum(run1_rdd_misses.values())]}
+        run2_data = {'Run': 'Run 2',
+                     'hits': [sum(run2_rdd_hits.values())],
+                     'misses': [sum(run2_rdd_misses.values())],
+                     'ratio': [float(sum(run2_rdd_hits.values()))/sum(run2_rdd_misses.values())]}
+        run1_data_df = pd.DataFrame(run1_data)
+        run2_data_df = pd.DataFrame(run2_data)
+        runs_overall_hit_miss_df = run1_data_df.append(run2_data_df, ignore_index=True)
+        # Plot
+        runs_overall_hit_miss_plot = plot_bar(df=runs_overall_hit_miss_df, categories='Run',
+                values='ratio', title='RDD Overall Hit-Miss Ratio', folder=self.folder)
+        # Report 
+        output.append('## Overall RDD Hit-Miss Ratio\n')
+        output.append(get_iframe_tag(runs_overall_hit_miss_plot))
+        output.append(runs_overall_hit_miss_df.to_html()+'\n')
+
+
+        # Write to file
         with open('{}/report.markdown'.format(self.folder), 'w') as f:
             f.write(''.join(output))
 
