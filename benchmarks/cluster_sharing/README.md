@@ -17,3 +17,11 @@
 
 ## Usage Instructions
 - run.py code_file
+
+
+## Web Server
+- To run the webserver:
+
+        ./server.sh
+
+- You can access the webserver at http://server-ip:7000
