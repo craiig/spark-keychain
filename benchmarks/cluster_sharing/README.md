@@ -1,10 +1,6 @@
 # CLuster Sharing Benchmakr Manager
 
 ## Installation Instructions
-- 
-
-
-## Usage Instructions
 - To install the dependencies, you'll first need *virtualenv*.
     - To download on ubuntu, use: `sudo apt-get install python-virtualenv`
 - Setup a virtual environment:
@@ -19,3 +15,5 @@
 
         pip install -r requirements.txt
 
+## Usage Instructions
+- run.py <name_of_scala_file>
