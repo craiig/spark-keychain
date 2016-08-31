@@ -1,4 +1,4 @@
-# CLuster Sharing Benchmakr Manager
+# Cluster Sharing Benchmakr Manager
 
 ## Installation Instructions
 - To install the dependencies, you'll first need *virtualenv*.
@@ -16,4 +16,4 @@
         pip install -r requirements.txt
 
 ## Usage Instructions
-- run.py <name_of_scala_file>
+- run.py code_file
