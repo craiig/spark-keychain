@@ -447,8 +447,20 @@ class BlockManagerMasterEndpoint(
     true
   }
 
+  private def canGetRemote(blockId: BlockId): Boolean = {
+    /* Only allow rdd unique blockids to be read remotely 
+     * any other blocks will have issues */
+    blockId match {
+      case RDDUniqueBlockId(_) => true
+      case _ => false
+    }
+  }
+
   private def getRemoteLocations(blockId: BlockId)
   : Option[Seq[BlockManagerId]]= {
+    if (!canGetRemote(blockId)){
+      return None
+    }
 
     val r:Seq[Seq[BlockManagerId]] = remoteBlockManagerMasters.toSeq.map (
     { case (name, rbmm) => {
@@ -476,9 +488,13 @@ class BlockManagerMasterEndpoint(
     }
   }
 
-  private def getRemoteLocationsMultipleBlockIds(blockIds: Array[BlockId])
+  private def getRemoteLocationsMultipleBlockIds(_blockIds: Array[BlockId])
   : Option[IndexedSeq[Seq[BlockManagerId]]]= {
-
+    //filter out anything that we can't ask for remotely
+    val blockIds = _blockIds.filter( canGetRemote(_) )
+    if ( blockIds.length == 0 ){
+      return None
+    }
     val r:Seq[IndexedSeq[Seq[BlockManagerId]]] = remoteBlockManagerMasters.toSeq.map (
     { case (name, rbmm) => {
       val f = rbmm.ask[IndexedSeq[Seq[BlockManagerId]]]( GetLocationsMultipleBlockIds(blockIds, false) )
