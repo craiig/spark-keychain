@@ -72,8 +72,8 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
 
           // If the task is running locally, do not persist the result
           if (context.isRunningLocally) {
-            val tookTimeMs = Utils.getUsedTimeMs(startTimeMs)
-            logInfo(s"Partition $key computed and returned locally in $tookTimeMs")
+            val tookTimeMs = System.currentTimeMillis - startTimeMs
+            logInfo(s"Partition $key computed and returned locally in $tookTimeMs ms")
             return computedValues
           }
 
@@ -83,8 +83,8 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
           val metrics = context.taskMetrics
           val lastUpdatedBlocks = metrics.updatedBlocks.getOrElse(Seq[(BlockId, BlockStatus)]())
           metrics.updatedBlocks = Some(lastUpdatedBlocks ++ updatedBlocks.toSeq)
-          val tookTimeMs = Utils.getUsedTimeMs(startTimeMs)
-          logInfo(s"Partition $key computed and cached in $tookTimeMs")
+          val tookTimeMs = System.currentTimeMillis - startTimeMs
+          logInfo(s"Partition $key computed and cached in $tookTimeMs ms")
 
           new InterruptibleIterator(context, cachedValues)
 
