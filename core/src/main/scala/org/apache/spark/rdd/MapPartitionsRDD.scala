@@ -21,15 +21,19 @@ import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, TaskContext, SparkContext}
 import org.apache.commons.codec.binary.Base64
-import org.apache.spark.storage.{BlockId, RDDUniqueBlockId}
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
-private[spark] class MapPartition(val prev: Partition, val funcStr:String)
+private[spark] class MapPartition(val prev: Partition, val funcStr:Option[String])
   extends Partition {
   override val index: Int = prev.index
   override def blockId(rdd:RDD[_]): BlockId = {
-    /* how does this interact with the partitioner? */
-   val str = s"${prev.blockId(rdd)}_map_${funcStr}"
-   RDDUniqueBlockId(str) 
+   //if the funcStr was successfully hashed, use that hash
+   if (!funcStr.isEmpty){
+     val str = s"map { ${prev.blockId(rdd)}, ${funcStr.get}}"
+     RDDUniqueBlockId(str) 
+   } else {
+     RDDBlockId(rdd.id, index)
+   }
   }
 }
 
@@ -39,20 +43,23 @@ private[spark] class MapPartition(val prev: Partition, val funcStr:String)
 private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
     var prev: RDD[T],
     f: (TaskContext, Int, Iterator[T]) => Iterator[U],  // (TaskContext, partition index, iterator)
-    preservesPartitioning: Boolean = false)
+    preservesPartitioning: Boolean = false,
+    lambdaHash: Option[String] = None)
   extends RDD[U](prev) {
 
-    val f_serialized = {
-      val ser = SparkContext.getOrCreate().env.serializer.newInstance()
-      val funcBytes = ser.serialize(f)
-      val funcStr = Base64.encodeBase64String(funcBytes.array)
-      logInfo(s"serialized function of size ${funcBytes.limit} bytes, base64 encoded is ${funcStr.length} bytes")
-      funcStr
-    }
+  val f_outerHash:Option[String] = SparkContext.getOrCreate().hash(f)
+
+  //only calculate a function hash if we were passed an innerhash
+  val f_hash:Option[String] = if(!lambdaHash.isEmpty){
+    Some(s"inner_${lambdaHash.get}_outer_${f_outerHash.get}")
+  } else {
+    println("MapPartition innerhash was empty so fell back to clasic naming")
+    None
+  }
 
   override val partitioner = if (preservesPartitioning) firstParent[T].partitioner else None
 
-  override def getPartitions: Array[Partition] = firstParent[T].partitions.map( p => new MapPartition(p, f_serialized) )
+  override def getPartitions: Array[Partition] = firstParent[T].partitions.map( p => new MapPartition(p, f_hash) )
 
   override def compute(split: Partition, context: TaskContext): Iterator[U] =
     f(context, split.index, firstParent[T].iterator(split.asInstanceOf[MapPartition].prev, context))
