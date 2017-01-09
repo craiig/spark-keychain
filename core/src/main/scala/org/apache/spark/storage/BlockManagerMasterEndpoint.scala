@@ -452,6 +452,7 @@ class BlockManagerMasterEndpoint(
      * any other blocks will have issues */
     blockId match {
       case RDDUniqueBlockId(_) => true
+      //case RDDBlockId(_, _) => true // uncomment this to share non-uniaue RDD blocks - THIS IS VERY UNSAFE
       case _ => false
     }
   }
@@ -488,13 +489,11 @@ class BlockManagerMasterEndpoint(
     }
   }
 
-  private def getRemoteLocationsMultipleBlockIds(_blockIds: Array[BlockId])
+  private def getRemoteLocationsMultipleBlockIds(blockIds: Array[BlockId])
   : Option[IndexedSeq[Seq[BlockManagerId]]]= {
     //filter out anything that we can't ask for remotely
-    val blockIds = _blockIds.filter( canGetRemote(_) )
-    if ( blockIds.length == 0 ){
-      return None
-    }
+    //TODO since we don't ask for broadcast rdds using this method, we skip this for now
+    // we need to make sure we return the locations int he right order
     val r:Seq[IndexedSeq[Seq[BlockManagerId]]] = remoteBlockManagerMasters.toSeq.map (
     { case (name, rbmm) => {
       val f = rbmm.ask[IndexedSeq[Seq[BlockManagerId]]]( GetLocationsMultipleBlockIds(blockIds, false) )

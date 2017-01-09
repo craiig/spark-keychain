@@ -642,6 +642,7 @@ private[spark] class BlockManager(
       logInfo(s"Found block $blockId remotely")
       return remote
     }
+    logInfo(s"Did not find block $blockId remotely or locally")
     None
   }
 
