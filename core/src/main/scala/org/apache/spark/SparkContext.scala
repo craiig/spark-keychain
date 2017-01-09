@@ -2103,6 +2103,10 @@ class SparkContext(config: SparkConf) extends Logging with ExecutorAllocationCli
     f
   }
 
+  private[spark] def hash[F <: AnyRef](f: F): Option[String] = {
+    ClosureCleaner.hash(f)
+  }
+
   /**
    * Set the directory under which RDDs are going to be checkpointed. The directory must
    * be a HDFS path if running on a cluster.
