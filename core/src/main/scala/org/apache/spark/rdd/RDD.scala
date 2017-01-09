@@ -325,7 +325,8 @@ abstract class RDD[T: ClassTag](
    */
   def map[U: ClassTag](f: T => U): RDD[U] = withScope {
     val cleanF = sc.clean(f)
-    new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF))
+    var hash = sc.hash(cleanF)
+    new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.map(cleanF), lambdaHash=hash)
   }
 
   /**
