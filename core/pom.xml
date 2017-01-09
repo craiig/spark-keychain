@@ -39,6 +39,11 @@
       <artifactId>avro-mapred</artifactId>
       <classifier>${avro.mapred.classifier}</classifier>
     </dependency>
+	<dependency>
+		<groupId>com.insightfullogic</groupId>
+		<artifactId>honest-profiler</artifactId>
+		<version>1.0-SNAPSHOT</version>
+	</dependency>
     <dependency>
       <groupId>com.google.guava</groupId>
       <artifactId>guava</artifactId>
@@ -54,6 +59,11 @@
     <dependency>
       <groupId>org.apache.xbean</groupId>
       <artifactId>xbean-asm5-shaded</artifactId>
+    </dependency>
+	<!-- this asm is required to support the full ASM5 features needed for bytecode hashing -->
+    <dependency>
+      <groupId>org.ow2.asm</groupId>
+      <artifactId>asm-util</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>

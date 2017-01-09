@@ -36,6 +36,9 @@ import org.apache.spark.shuffle.FetchFailedException
 import org.apache.spark.storage.{StorageLevel, TaskResultBlockId}
 import org.apache.spark.util._
 
+import com.insightfullogic.honest_profiler.core.control.{Agent => SampleAgent};
+//import com.craiig.jvm_method_trace.{Agent => MethodAgent};
+
 /**
  * Spark executor, backed by a threadpool to run tasks.
  *
@@ -222,6 +225,40 @@ private[spark] class Executor(
 
         // Run the actual task and measure its runtime.
         taskStart = System.currentTimeMillis()
+        var sampling = false
+        var method_tracing = false
+        if (!conf.getOption("spark.profiling.dir").isEmpty) {
+          sampling = conf.getBoolean("spark.profiling.sampleStacks", false)
+          //method_tracing = conf.getBoolean("spark.profiling.methodTracing", false)
+          val appId = conf.getAppId
+          if(sampling){
+            if(SampleAgent.isRunning()){
+              SampleAgent.stop()
+            }
+            val logPath = conf.get("spark.profiling.dir") + s"/profile_app=${appId}_exec=${executorId}_task=${taskId}.hpl"
+            val samplingMin = conf.getInt("spark.profiling.samplingIntervalMin", 11)
+            val samplingMax = conf.getInt("spark.profiling.samplingIntervalMax", 2*samplingMin)
+            SampleAgent.setFilePath(logPath)
+            SampleAgent.setSamplingInterval(samplingMin, samplingMax); //41 milliseconds sufficient?
+            logInfo(s"CPU Sampling Starting. Sampling Min: $samplingMin Max: $samplingMax")
+            val started = SampleAgent.start()
+            if (!started){
+              logWarning("CPU Sampling failed to start")
+            }
+          }
+          //if(method_tracing){
+            //if(MethodAgent.isRunning()){
+              //MethodAgent.stop()
+            //}
+            //val logPath = conf.get("spark.profiling.dir") + s"/profile_app=${appId}_exec=${executorId}_task=${taskId}.method_trace"
+            //MethodAgent.setFilePath(logPath)
+            //logInfo("Method Tracing Starting")
+            //val started = MethodAgent.start()
+            //if (!started){
+              //logWarning("Method Tracing failed to start")
+            //}
+          //}
+        }
         var threwException = true
         val (value, accumUpdates) = try {
           val res = task.run(
@@ -254,6 +291,14 @@ private[spark] class Executor(
           }
         }
         val taskFinish = System.currentTimeMillis()
+        if (sampling){
+          SampleAgent.stop()
+          logInfo(s"CPU Sampling Stopped. Log stored at: ${SampleAgent.getFilePath}")
+        }
+        //if (method_tracing){
+          //MethodAgent.stop()
+          //logInfo(s"Method Tracing Stopped. Log stored at: ${MethodAgent.getFilePath}")
+        //}
 
         // If the task has been killed, let's fail it.
         if (task.killed) {
