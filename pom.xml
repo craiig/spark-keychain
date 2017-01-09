@@ -402,6 +402,13 @@
         <artifactId>xbean-asm5-shaded</artifactId>
         <version>4.4</version>
       </dependency>
+	  <!-- This is similar to the above ASM shaded, but includes all ASM features, which is needed
+		   for the Spark lambda hashing feature -->
+      <dependency>
+        <groupId>org.ow2.asm</groupId>
+        <artifactId>asm-util</artifactId>
+        <version>5.0.4</version>
+      </dependency>
 
       <!-- Shaded deps marked as provided. These are promoted to compile scope
            in the modules where we want the shaded classes to appear in the

@@ -17,12 +17,21 @@
 
 package org.apache.spark.util
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectOutputStream}
 
-import scala.collection.mutable.{Map, Set}
+import scala.collection.mutable.{Map, Set, SortedSet}
+import scala.collection.JavaConverters._
 
-import org.apache.xbean.asm5.{ClassReader, ClassVisitor, MethodVisitor, Type}
-import org.apache.xbean.asm5.Opcodes._
+import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Type, Label, Handle}
+import org.objectweb.asm.tree.{ClassNode, MethodNode, InsnList, AbstractInsnNode}
+import org.objectweb.asm.util.{TraceMethodVisitor, Textifier}
+import org.objectweb.asm.Opcodes._
+
+//for function serialization & encoding
+import java.security.MessageDigest
+import java.util.regex.Pattern
+import org.apache.spark.SparkContext
+import org.apache.commons.codec.binary.Base64
 
 import org.apache.spark.{Logging, SparkEnv, SparkException}
 
@@ -71,6 +80,23 @@ private[spark] object ClosureCleaner extends Logging {
     }
     (Nil, Nil)
   }
+  /* returns same as above but not filtered for outers only */
+  private def getAllClassesAndObjects(obj: AnyRef): (List[Class[_]], List[AnyRef]) = {
+    for (f <- obj.getClass.getDeclaredFields) {
+      f.setAccessible(true)
+      val outer = f.get(obj)
+      // The outer pointer may be null if we have cleaned this closure before
+      if (outer != null) {
+        if (isClosure(f.getType)) {
+          val recurRet = getAllClassesAndObjects(outer)
+          return (f.getType :: recurRet._1, outer :: recurRet._2)
+        } else {
+          return (f.getType :: Nil, outer :: Nil) // Stop at the first $outer that is not a closure
+        }
+      }
+    }
+    (Nil, Nil)
+  }
   /**
    * Return a list of classes that represent closures enclosed in the given closure object.
    */
@@ -103,6 +129,314 @@ private[spark] object ClosureCleaner extends Logging {
     } else {
       null
     }
+  }
+
+  /* returns a map of (class to (funcname, funcsig) ) of all functions called by the given class, recursively */
+  type Class2Func = (String,String,String)
+  private def getFunctionsCalled(obj: AnyRef): Set[Class2Func] = {
+    var cls = obj.getClass
+
+    val seen = SortedSet[Class2Func]()
+    getClassReader(obj.getClass).accept(new CalledFunctionsFinder(seen), 0)
+
+    var stack = SortedSet[Class2Func]()
+    getClassReader(obj.getClass).accept(new CalledFunctionsFinder(stack), 0)
+
+    while(!stack.isEmpty){
+      val tup = stack.head
+      stack = stack.tail
+      val clazz = Class.forName(tup._1.replace('/', '.'), false, Thread.currentThread.getContextClassLoader)
+      val cr = getClassReader(clazz)
+
+      val set = SortedSet[Class2Func]()
+      val sigtup = (tup._2, tup._3)
+      cr.accept(new CalledFunctionsFinder(set, Some(Set(sigtup))), 0)
+
+      for (newtups <- set -- seen){
+        seen += newtups
+        stack += newtups
+      }
+    }
+    logDebug(s"Found ${seen.size} functions called by ${obj.getClass.getName}")
+
+    seen
+  }
+
+  /* hash a class, optionally only the given functions,
+   * hashing the function using hashObj
+   * - if anonymizeClass is true, the hashing will ignore the 
+   * name of the function itself, which is useful for hashing
+   * closures from the scala REPL
+   * */
+  private def hashClass(obj: AnyRef,
+    hashObj: MessageDigest,
+    anonymizeClass:Boolean = false,
+    funcList: Set[(String,String)] = Set()
+    ): Unit  = {
+
+     /* build classnode */
+     val cn = new ClassNode()
+     //we might get passed a function of a class, or a class itself, so we disambiguate
+     val objcls:Class[_] = if (obj.isInstanceOf[Class[_]]){
+       obj.asInstanceOf[Class[_]]
+     } else {
+       obj.getClass
+     }
+     getClassReader(objcls).accept(cn, 0)
+
+     logDebug(s"Hashing Class")
+     logDebug(s"name: ${cn.name}")
+     logDebug(s"outerClass: ${cn.outerClass}")
+     logDebug(s"outerMethod: ${cn.outerMethod}")
+     logDebug(s"outerMethodDesc: ${cn.outerMethodDesc}")
+     logDebug(s"signature: ${cn.signature}")
+     logDebug(s"superName: ${cn.superName}")
+     
+     for( f <- objcls.getDeclaredFields ){
+       if (f.getName == "serialVersionUID"){
+         try {
+           logDebug(s"+ serialVersionUID: ${f.getLong(null)}")
+         } catch {
+           case e: Exception => logDebug("+ serialVersionUID: exception")
+         }
+       }
+     }
+
+
+     /* read class using a visitor we can override
+      * make sure to rewrite any non-identifying symbols that could cause
+      * differences in the hash but aren't functionally relevant, such as:
+      *  - Scala REPL adds 'lineXX' package for each lambda
+      * for now we only want to support very simple lambdas, so we only rewrite
+      * references to their current package to a non-REPL form, but keep any references
+      * to other potentially REPL functions, but we also want to avoid ambiguity
+      */
+
+     //create a regex that replaces the original name with the munged
+     val re_line = (s:String) => {
+       if(anonymizeClass){
+         val quoted_name = "\\$line\\d+".r
+         var ret = quoted_name.replaceAllIn(s, "\\$lineXX")
+         ret
+       } else {
+         s
+       }
+     }
+     val re_name = (s:String) => {
+       if(anonymizeClass && cn.name != null){
+         val quoted_name = Pattern.quote(cn.name).r
+         quoted_name.replaceAllIn(re_line(s), "THISCLASS")
+       } else {
+         s
+       }
+     }
+     val re_outer = (s:String) => {
+       if(anonymizeClass && cn.outerClass != null){
+         val quoted_outer = Pattern.quote(cn.outerClass).r
+         quoted_outer.replaceAllIn(re_line(s), "THISOUTER")
+       } else {
+         s
+       }
+     }
+
+     // A methodvisitor to rename strings in the bytecode output
+     val p = new Textifier(ASM5) {
+       override def visitLocalVariable(name:String, desc:String,
+         signature:String, start:Label, end:Label, index:Int){
+           var newdesc = re_outer(re_name(desc))
+           super.visitLocalVariable(name, newdesc, signature,
+             start, end, index)
+       }
+       /* deprecated by ASM5, kept here to ensure renaming works */
+      override def visitMethodInsn(opcode:Int, owner:String,
+        name:String, desc:String){
+          var newname = re_name(name)
+          var newowner = re_name(owner)
+          var newdesc = re_outer(re_name(desc))
+          super.visitMethodInsn(opcode, newowner, newname, newdesc);
+        }
+       override def visitMethodInsn(opcode:Int, owner:String,
+         name:String, desc:String, itf:Boolean){
+          var newname = re_name(name)
+          var newowner = re_name(owner)
+          var newdesc = re_outer(re_name(desc))
+
+          if(newowner.startsWith("$line")){
+            newname = """VAL\d+""".r.replaceAllIn(newname, "VALXX")
+          }
+
+          //call super to print method
+          super.visitMethodInsn(opcode, newowner, newname, newdesc, itf);
+       }
+       override def visitLineNumber(line:Int, start:Label){
+          //this is a no-op to suppress line number output
+       }
+       override def visitFieldInsn( opcode:Int, owner:String,
+         name:String, desc:String){
+           /* rename references to fields */
+           val newowner = re_name(owner)
+           val newdesc = re_name(desc)
+           var newname = re_name(name)
+           if (opcode == GETFIELD && owner.startsWith("$line")) {
+             newname = """VAL\d+""".r.replaceAllIn(newname, "VALXX")
+           }
+           super.visitFieldInsn(opcode, newowner, newname, newdesc)
+       }
+     }
+     val tm = new TraceMethodVisitor(p)
+
+     var bytecode_string = new StringBuilder
+
+     val methods = cn.methods.asInstanceOf[java.util.ArrayList[MethodNode]].asScala
+     val filter = funcList.size > 0
+     for(m:MethodNode <- methods){
+       //println(s"checking if ${(m.name,m.desc)} in ${funcList}: ${ funcList contains (m.name,m.desc) }");
+       if( !filter || (funcList contains (m.name,m.desc)) ){
+         val newdesc = re_outer(re_name(m.desc))
+         var newname = re_name(m.name)
+         if (newdesc.startsWith("()L$line")) {
+           newname = """VAL\d+""".r.replaceAllIn(newname, "VALXX")
+         }
+         var methodHeader = s"${newname} ${newdesc} ${m.signature}"
+
+         bytecode_string.append(methodHeader)
+         hashObj.update(methodHeader.getBytes)
+
+         m.accept(tm) //visit method
+
+         //read text from method visitor
+         for(o <- p.getText.asScala){
+           var s = o.toString()
+           bytecode_string.append(s)
+           hashObj.update(s.getBytes)
+         }
+         p.getText.clear
+       }
+     }
+
+    logTrace(s"Bytecode:\n$bytecode_string")
+  }
+
+  /** Hash the given closure.
+   * This hashes only the functional pieces of the closure
+   *  - function signature
+   *  - instructions
+   * so that it's functionality can be summarized as a hash, used for comparison between different
+   * spark contexts that may be in use
+   */
+  def hash(func: AnyRef): Option[String] = {
+    if (!isClosure(func.getClass)) {
+      logInfo("Expected a closure; got " + func.getClass.getName)
+      return None
+    }
+    if (func == null) {
+      return None
+    }
+    logDebug(s"+++ Hashing closure $func (${func.getClass.getName}) +++")
+
+    var classesToVisit = getFunctionsCalled(func)
+    logDebug(s"+++ All classes to visit: $classesToVisit")
+
+    /* hash the given function */
+    var hash = MessageDigest.getInstance("SHA-256")
+
+    hashClass(func, hash, true)  //true = anonymize function
+
+    /* hash the bytecode of all functions that this function calls */
+    /* todo rewrite this so we only call it once per class */
+    for( cls <- classesToVisit ){
+      var clzname = cls._1.replace('/', '.')
+      var obj = Class.forName( clzname,
+        false, Thread.currentThread.getContextClassLoader)
+      logDebug(s"+++ hashing $clzname functions: ${ (cls._2, cls._3) }")
+      hashClass(obj, hash, true, Set((cls._2, cls._3)) )
+    }
+
+    // Now we want to serialize & hash any referenced fields
+    /* this is actually way simpler than it seems
+     * we just serialize the top-level class which should capture everything
+     * required */
+    var serialize_func = (f:AnyRef) => {
+      val bos = new ByteArrayOutputStream()
+      val out = new ObjectOutputStream(bos)
+      out.writeObject(func)
+      out.close()
+      logInfo(s"unmangled serialized func byte array:\n${bos.toByteArray.mkString(",")}")
+      new String(bos.toByteArray, "ISO-8859-1") //iso 8859-1 is 1-1 character to byte
+    }
+    /* fix up the serialization to avoid some non-determinism from the REPL */
+    val re_serialized = (s:String) => {
+     /* serialversionUID */
+     // python re.sub(r'sr..lineXX.\$read(\$\$iwC)*........\x02', 'sr\x00\x09.REPLCLASS\x02', s)
+     val all_res = "res\\d+".r.replaceAllIn(s, "resXX")
+     val all_vals = "VAL\\d+".r.replaceAllIn(all_res, "valXX")
+     val lineXX = "\\$line\\d+".r.replaceAllIn(all_vals, "lineXX")
+     /* replace the serialversion ID with a dummy value
+      * (?s) needed to get the dot matching newlines, etc.
+      * */
+     val replclass = "(?s)sr..lineXX.\\$read(\\$\\$iwC)*........\\x02\\x00".r.replaceAllIn(lineXX, "sr..REPLCLASS\\x02\\x00")
+
+     /* replace the RDD ID with a dummy value
+      * lots of context is included here, up to the start of the RDD id serialization, so we're sure we got it right
+      * as time goes on we may need to refine this so that we don't miss a case
+      * we need to mask the rddid off, because all parents have a numerical rdd, even if they also have RDDUnique
+      * */
+     val rddid = "r\\x00\\x18org.apache.spark.rdd.RDD........\\x02\\x00\\x05I\\x00\\x02idL\\x00\\x0echeckpointDatat\\x00\\x0eLscala/Option;L\\x00'org\\$apache\\$spark\\$rdd\\$RDD\\$\\$dependencies_t\\x00\\x16Lscala/collection/Seq;L\\x00\\$org\\$apache\\$spark\\$rdd\\$RDD\\$\\$evidence\\$1q\\x00~\\x00.L\\x00\\x0cstorageLevelt\\x00'Lorg/apache/spark/storage/StorageLevel;xp....s"
+     .r.replaceAllIn(replclass, "RDDIDMASK")
+     rddid
+    }
+
+    //testing that serialization is deterministic
+    val serial1 = re_serialized(serialize_func(func))
+
+    logInfo(s"Func serialization:\n${serial1}")
+    var serial_hash = MessageDigest.getInstance("SHA-256")
+    serial_hash.update(serial1.getBytes)
+    logInfo(s"mangled serialized func byte array:\n${serial1.getBytes("ISO-8859-1").mkString(",")}")
+    var serial_hash64 = Base64.encodeBase64String(serial_hash.digest)
+    logInfo(s"Func serialization hash: $serial_hash64")
+
+    // If accessed fields is not populated yet, we assume that
+    // the closure we are trying to clean is the starting one
+    val (outerClasses, outerObjects) = getAllClassesAndObjects(func)
+    val innerClasses = getInnerClosureClasses(func)
+    var accessedFields: Map[Class[_], Set[String]] = Map.empty
+    if (accessedFields.isEmpty) {
+      logDebug(s" + populating accessed fields")
+      // Initialize accessed fields with the outer classes first
+      // This step is needed to associate the fields to the correct classes later
+      for (cls <- outerClasses) {
+        //accessedFields(cls) = Set[String]()
+      }
+      // Populate accessed fields by visiting all fields and methods accessed by this and
+      // all of its inner closures. If transitive cleaning is enabled, this may recursively
+      // visits methods that belong to other classes in search of transitively referenced fields.
+      for (cls <- func.getClass :: innerClasses) {
+        // true = follow all accesses
+        //getClassReader(cls).accept(new RecursiveFieldAccessFinder(accessedFields, true), 0)
+        getClassReader(cls).accept(new FieldAccessFinder(accessedFields, true), 0)
+      }
+    }
+    logDebug(s" + fields accessed by starting closure: " + accessedFields.size)
+    accessedFields.foreach { f => logDebug("     " + f) }
+    // iterate over the acessed values and hash them
+    logDebug(s" ++ fields accessible: ")
+    for ( (cls, obj) <- (outerClasses zip outerObjects).reverse ){
+      logDebug(s" +++ cls: ${cls} obj: ${obj}")
+      //logDebug(s" ++ serializing object ${obj} of ${cls.getName}")
+      //for (fieldName <- accessedFields(cls)) {
+        //val field = cls.getDeclaredField(fieldName)
+        //field.setAccessible(true)
+        //val value = field.get(obj)
+        //hash.update(value.hashCode);
+      //}
+    }
+
+    //finalize the hash
+    var hashbytes = hash.digest
+    var hashbytesenc = Base64.encodeBase64String(hashbytes)
+    logInfo(s"Bytecode hash: $hashbytesenc")
+    Some(hashbytesenc)
   }
 
   /**
@@ -408,6 +742,65 @@ private[util] class FieldAccessFinder(
     }
   }
 }
+private[util] class RecursiveFieldAccessFinder(
+    fields: Map[Class[_], Set[String]],
+    findTransitively: Boolean,
+    specificMethod: Option[MethodIdentifier[_]] = None,
+    visitedMethods: Set[MethodIdentifier[_]] = Set.empty)
+  extends ClassVisitor(ASM5) {
+
+  override def visitMethod(
+      access: Int,
+      name: String,
+      desc: String,
+      sig: String,
+      exceptions: Array[String]): MethodVisitor = {
+
+    // If we are told to visit only a certain method and this is not the one, ignore it
+    if (specificMethod.isDefined &&
+        (specificMethod.get.name != name || specificMethod.get.desc != desc)) {
+      return null
+    }
+
+    new MethodVisitor(ASM5) {
+      override def visitFieldInsn(op: Int, owner: String, name: String, desc: String) {
+        if (op == GETFIELD) {
+          var cl = Class.forName(owner.replace('/', '.'),
+            false,
+            Thread.currentThread.getContextClassLoader)
+          if( ! (fields contains cl) ) fields(cl) = Set[String]()
+          fields(cl) += name
+        }
+      }
+
+      override def visitMethodInsn(op: Int, owner: String, name: String, desc: String, itf: Boolean) {
+        var cl = Class.forName(owner.replace('/', '.'),
+          false,
+          Thread.currentThread.getContextClassLoader)
+        println(s"visitMethodInsn: $owner")
+        return
+        //for (cl <- fields.keys if cl.getName == owner.replace('/', '.')) {
+          // Check for calls a getter method for a variable in an interpreter wrapper object.
+          // This means that the corresponding field will be accessed, so we should save it.
+          if (op == INVOKEVIRTUAL && owner.endsWith("$iwC") && !name.endsWith("$outer")) {
+            if( ! (fields contains cl) ) fields(cl) = Set[String]()
+            fields(cl) += name
+          }
+          // Optionally visit other methods to find fields that are transitively referenced
+          if (findTransitively) {
+            val m = MethodIdentifier(cl, name, desc)
+            if (!visitedMethods.contains(m)) {
+              // Keep track of visited methods to avoid potential infinite cycles
+              visitedMethods += m
+              ClosureCleaner.getClassReader(cl).accept(
+                new RecursiveFieldAccessFinder(fields, findTransitively, Some(m), visitedMethods), 0)
+            }
+          }
+        //}
+      }
+    }
+  }
+}
 
 private class InnerClosureFinder(output: Set[Class[_]]) extends ClassVisitor(ASM5) {
   var myName: String = null
@@ -440,5 +833,41 @@ private class InnerClosureFinder(output: Set[Class[_]]) extends ClassVisitor(ASM
         }
       }
     }
+  }
+}
+
+/* Finds all functions called from the given class, returning a list */
+private class CalledFunctionsFinder(
+    output: Set[(String,String,String)],
+    funcsToRead: Option[Set[(String,String)]] = None) extends ClassVisitor(ASM5) {
+  var myName: String = null
+  var filterFunctions = !funcsToRead.isEmpty
+  var followFunctions = funcsToRead getOrElse Set()
+
+  override def visit(version: Int, access: Int, name: String, sig: String,
+      superName: String, interfaces: Array[String]) {
+    myName = name
+  }
+
+  override def visitMethod(access: Int, name: String, desc: String,
+      sig: String, exceptions: Array[String]): MethodVisitor = {
+
+        /* only visit this method if it's in the list */
+       var sig = (name, desc)
+       if(filterFunctions && !(followFunctions contains sig)){
+         //return noop method visitor
+         new MethodVisitor(ASM5) { }
+       } else {
+         new MethodVisitor(ASM5) {
+           override def visitMethodInsn(
+             op: Int, owner: String, name: String, desc: String, itf: Boolean) {
+               val argTypes = Type.getArgumentTypes(desc)
+
+               if(owner != myName){
+                 output += new Tuple3(owner, name, desc)
+               }
+           }
+         }
+       }
   }
 }
