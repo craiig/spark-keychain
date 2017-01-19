@@ -17,7 +17,12 @@
 
 package org.apache.spark.util
 
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectOutputStream}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectOutputStream, DataOutputStream}
+import java.io.{ObjectStreamClass}
+import sun.misc.Unsafe
+import java.lang.reflect.Modifier
+import java.lang.reflect.{Array => ReflectArray};
+import java.nio.ByteBuffer;
 
 import scala.collection.mutable.{Map, Set, SortedSet}
 import scala.collection.JavaConverters._
@@ -314,7 +319,171 @@ private[spark] object ClosureCleaner extends Logging {
        }
      }
 
-    logTrace(s"Bytecode:\n$bytecode_string")
+    logTrace(s"HashClass Bytecode:\n$bytecode_string")
+  }
+
+  /* a different way of approaching serialization:
+   * use java reflection and sun.misc.unsafe to introspect the memory directly
+   * copy the serialization code and walk the objects ourselves
+   * this will only serialize non-transitive, non-static primitive values
+   */
+  def hashInputPrimitives(func: AnyRef,
+    dos: DataOutputStream,
+    visited:Set[Object] = Set[Object](),
+    clz:Class[_] = null
+  ):Unit = {
+    /* get unsafe handle */
+    //var unsafe = Unsafe.getUnsafe();
+    val field = classOf[Unsafe].getDeclaredField("theUnsafe");
+    field.setAccessible(true);
+    val unsafe = field.get(null).asInstanceOf[Unsafe];
+    
+    //avoid loops
+    if(visited contains func){
+      return;
+    }
+    visited += func;
+
+    val toVisit = Set[AnyRef]()
+
+    var cl = clz;
+    if(cl == null){
+      cl = func.getClass()
+    }
+    logTrace(s"hashInputPrimitives: class: ${cl.getName}")
+    for( f <- cl.getDeclaredFields ){
+      f.setAccessible(true)
+      val transient = Modifier.isTransient(f.getModifiers)
+      val static = Modifier.isStatic(f.getModifiers)
+      val fldtype = f.getType()
+      val primitive = fldtype.isPrimitive()
+
+      logTrace(s"hashInputPrimitives:\tfield ${f.getName} type: ${fldtype.getName}")
+      logTrace(s"hashInputPrimitives:\t\tstatic: ${static} primitive: ${primitive} type: ${fldtype.getName} transient: ${transient}")
+
+      val writeBytes = (output:DataOutputStream, thing:AnyRef, offset:Long, size:Integer) => {
+        for(i <- 0 until size){
+             output.writeByte( unsafe.getByte(thing.asInstanceOf[Object], offset+i) )
+        }
+      }
+
+      if( !( static || transient ) ){
+        val offset = unsafe.objectFieldOffset( f )
+        //if primitive, grab value
+        if(primitive && !fldtype.isArray()){
+          logTrace(s"hashInputPrimitives:\t\tadding to hash")
+          if( fldtype == classOf[Byte] ){
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 1)
+          } else if( fldtype == classOf[Char] ){
+            //dos.writeChar( unsafe.getChar(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 2)
+          } else if( fldtype == classOf[Int] ){
+            //dos.writeInt( unsafe.getInt(func.asInstanceOf[Object], offset) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset+1) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset+2) )
+            //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset+3) )
+            writeBytes(dos, func, offset, 4)
+          } else if( fldtype == classOf[Long] ){
+            //dos.writeLong( unsafe.getLong(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 8)
+          } else if( fldtype == classOf[Float] ){
+            //dos.writeFloat( unsafe.getFloat(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 4)
+          } else if( fldtype == classOf[Double] ){
+            //dos.writeDouble( unsafe.getDouble(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 8)
+          } else if( fldtype == classOf[Boolean] ){
+            //dos.writeBoolean( unsafe.getBoolean(func.asInstanceOf[Object], offset) )
+            writeBytes(dos, func, offset, 1)
+          } else {
+            logError("hashInputPrimitives: Error could not determine primitive type")
+          }
+        }
+        else if(fldtype.isArray()){
+          val Value:Array[_] = f.get(func).asInstanceOf[Array[_]]
+
+          val length = ReflectArray.getLength(Value)
+          val baseOffset = unsafe.arrayBaseOffset( fldtype );
+          val indexScale = unsafe.arrayIndexScale( fldtype );
+          logTrace(s"hashInputPrimitives:\tfield is array, value:${Value.mkString(",")} length: ${length} baseOffset: ${baseOffset} indexScale: ${indexScale}");
+          logTrace(s"hashInputPrimitives:\t\tadding to hash")
+
+          //read the bytes of the array so that we don't have to infer type
+          // this has a problem in that reading bytes gives different byte ordering
+          // than reading int, double, etc, due to endianness
+          //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
+          for(i <- 0 to (indexScale*length-1) ){
+            //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
+            dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+          }
+        } else {
+          //if not primitive, recurse into and find it's primitives
+          // we don't care about the value of the reference really
+          // or the type, as this is encoded in the bytecode hash! :D
+          val p = f.get(func)
+          if(p != null){
+            logTrace(s"hashInputPrimitives:\t\tadding to visit list")
+            toVisit += p
+            //hashInputPrimitives(p, dos, visited)
+            //logTrace(s"hashInputPrimitives: class: ${cl.getName}")
+          }
+        }
+      }
+    }
+
+    for( p <- toVisit ){
+      hashInputPrimitives(p, dos, visited)
+    }
+
+    //TODO support externalizable objects?
+
+    //follow the parent class desc
+    if( cl.getSuperclass() != null ){
+      hashInputPrimitives(func, dos, visited, cl.getSuperclass() )
+    }
+  }
+
+  /* serialize the entire function to bytes, and fix/blank out
+   * any fields that we don't need, then return the bytes for hashing
+   * we just serialize the top-level class which should capture everything
+   * required */
+  def hashSerialization(func:AnyRef): Array[Byte] = {
+    var serialize_func = (f:AnyRef) => {
+      val bos = new ByteArrayOutputStream()
+      val out = new ObjectOutputStream(bos)
+      out.writeObject(func)
+      out.close()
+      //logTrace(s"serializationHash: unmangled serialized func byte array:\n${bos.toByteArray.mkString(",")}")
+      new String(bos.toByteArray, "ISO-8859-1") //iso 8859-1 is 1-1 character to byte
+    }
+    /* fix up the serialization to avoid some non-determinism from the REPL */
+    val re_serialized = (s:String) => {
+     /* serialversionUID */
+     // python re.sub(r'sr..lineXX.\$read(\$\$iwC)*........\x02', 'sr\x00\x09.REPLCLASS\x02', s)
+     val all_res = "res\\d+".r.replaceAllIn(s, "resXX")
+     val all_vals = "VAL\\d+".r.replaceAllIn(all_res, "valXX")
+     val lineXX = "\\$line\\d+".r.replaceAllIn(all_vals, "lineXX")
+     /* replace the serialversion ID with a dummy value
+      * (?s) needed to get the dot matching newlines, etc.
+      * */
+     val replclass = "(?s)sr..lineXX.\\$read(\\$\\$iwC)*........\\x02\\x00".r.replaceAllIn(lineXX, "sr..REPLCLASS\\x02\\x00")
+
+     /* replace the RDD ID with a dummy value
+      * lots of context is included here, up to the start of the RDD id serialization, so we're sure we got it right
+      * as time goes on we may need to refine this so that we don't miss a case
+      * we need to mask the rddid off, because all parents have a numerical rdd, even if they also have RDDUnique
+      * */
+     val rddid = "r\\x00\\x18org.apache.spark.rdd.RDD........\\x02\\x00\\x05I\\x00\\x02idL\\x00\\x0echeckpointDatat\\x00\\x0eLscala/Option;L\\x00'org\\$apache\\$spark\\$rdd\\$RDD\\$\\$dependencies_t\\x00\\x16Lscala/collection/Seq;L\\x00\\$org\\$apache\\$spark\\$rdd\\$RDD\\$\\$evidence\\$1q\\x00~\\x00.L\\x00\\x0cstorageLevelt\\x00'Lorg/apache/spark/storage/StorageLevel;xp....s"
+     .r.replaceAllIn(replclass, "RDDIDMASK")
+     rddid
+    }
+
+    //testing that serialization is deterministic
+    val serial1 = re_serialized(serialize_func(func));
+    //logTrace(s"serializationHash: mangled serialized func byte array:\n${serial1.getBytes("ISO-8859-1").mkString(",")}")
+    serial1.getBytes("ISO-8859-1")
   }
 
   /** Hash the given closure.
@@ -353,90 +522,36 @@ private[spark] object ClosureCleaner extends Logging {
     }
 
     // Now we want to serialize & hash any referenced fields
-    /* this is actually way simpler than it seems
-     * we just serialize the top-level class which should capture everything
-     * required */
-    var serialize_func = (f:AnyRef) => {
-      val bos = new ByteArrayOutputStream()
-      val out = new ObjectOutputStream(bos)
-      out.writeObject(func)
-      out.close()
-      logInfo(s"unmangled serialized func byte array:\n${bos.toByteArray.mkString(",")}")
-      new String(bos.toByteArray, "ISO-8859-1") //iso 8859-1 is 1-1 character to byte
-    }
-    /* fix up the serialization to avoid some non-determinism from the REPL */
-    val re_serialized = (s:String) => {
-     /* serialversionUID */
-     // python re.sub(r'sr..lineXX.\$read(\$\$iwC)*........\x02', 'sr\x00\x09.REPLCLASS\x02', s)
-     val all_res = "res\\d+".r.replaceAllIn(s, "resXX")
-     val all_vals = "VAL\\d+".r.replaceAllIn(all_res, "valXX")
-     val lineXX = "\\$line\\d+".r.replaceAllIn(all_vals, "lineXX")
-     /* replace the serialversion ID with a dummy value
-      * (?s) needed to get the dot matching newlines, etc.
-      * */
-     val replclass = "(?s)sr..lineXX.\\$read(\\$\\$iwC)*........\\x02\\x00".r.replaceAllIn(lineXX, "sr..REPLCLASS\\x02\\x00")
-
-     /* replace the RDD ID with a dummy value
-      * lots of context is included here, up to the start of the RDD id serialization, so we're sure we got it right
-      * as time goes on we may need to refine this so that we don't miss a case
-      * we need to mask the rddid off, because all parents have a numerical rdd, even if they also have RDDUnique
-      * */
-     val rddid = "r\\x00\\x18org.apache.spark.rdd.RDD........\\x02\\x00\\x05I\\x00\\x02idL\\x00\\x0echeckpointDatat\\x00\\x0eLscala/Option;L\\x00'org\\$apache\\$spark\\$rdd\\$RDD\\$\\$dependencies_t\\x00\\x16Lscala/collection/Seq;L\\x00\\$org\\$apache\\$spark\\$rdd\\$RDD\\$\\$evidence\\$1q\\x00~\\x00.L\\x00\\x0cstorageLevelt\\x00'Lorg/apache/spark/storage/StorageLevel;xp....s"
-     .r.replaceAllIn(replclass, "RDDIDMASK")
-     rddid
-    }
-
-    //testing that serialization is deterministic
-    val serial1 = re_serialized(serialize_func(func))
-
-    logInfo(s"Func serialization:\n${serial1}")
+    /* disable serialization hashing for now */
+    /* 
+    val serializationBytes = hashSerialization(func);
     var serial_hash = MessageDigest.getInstance("SHA-256")
-    serial_hash.update(serial1.getBytes)
-    logInfo(s"mangled serialized func byte array:\n${serial1.getBytes("ISO-8859-1").mkString(",")}")
+    serial_hash.update(serializationBytes)
     var serial_hash64 = Base64.encodeBase64String(serial_hash.digest)
-    logInfo(s"Func serialization hash: $serial_hash64")
+    logInfo(s"Serialization hash: $serial_hash64")
+    */
 
-    // If accessed fields is not populated yet, we assume that
-    // the closure we are trying to clean is the starting one
-    val (outerClasses, outerObjects) = getAllClassesAndObjects(func)
-    val innerClasses = getInnerClosureClasses(func)
-    var accessedFields: Map[Class[_], Set[String]] = Map.empty
-    if (accessedFields.isEmpty) {
-      logDebug(s" + populating accessed fields")
-      // Initialize accessed fields with the outer classes first
-      // This step is needed to associate the fields to the correct classes later
-      for (cls <- outerClasses) {
-        //accessedFields(cls) = Set[String]()
-      }
-      // Populate accessed fields by visiting all fields and methods accessed by this and
-      // all of its inner closures. If transitive cleaning is enabled, this may recursively
-      // visits methods that belong to other classes in search of transitively referenced fields.
-      for (cls <- func.getClass :: innerClasses) {
-        // true = follow all accesses
-        //getClassReader(cls).accept(new RecursiveFieldAccessFinder(accessedFields, true), 0)
-        getClassReader(cls).accept(new FieldAccessFinder(accessedFields, true), 0)
-      }
-    }
-    logDebug(s" + fields accessed by starting closure: " + accessedFields.size)
-    accessedFields.foreach { f => logDebug("     " + f) }
-    // iterate over the acessed values and hash them
-    logDebug(s" ++ fields accessible: ")
-    for ( (cls, obj) <- (outerClasses zip outerObjects).reverse ){
-      logDebug(s" +++ cls: ${cls} obj: ${obj}")
-      //logDebug(s" ++ serializing object ${obj} of ${cls.getName}")
-      //for (fieldName <- accessedFields(cls)) {
-        //val field = cls.getDeclaredField(fieldName)
-        //field.setAccessible(true)
-        //val value = field.get(obj)
-        //hash.update(value.hashCode);
-      //}
-    }
+    //hash the primitives
+    val bos = new ByteArrayOutputStream()
+    val dos = new DataOutputStream(bos)
+    hashInputPrimitives( func, dos )
+    dos.close()
+    logTrace(s"Primitive Bytes: ${ bos.toByteArray.mkString(",") } ")
+
+    var primitiveHash = MessageDigest.getInstance("SHA-256")
+    primitiveHash.update(bos.toByteArray)
+    var primitive_hash64 = Base64.encodeBase64String(primitiveHash.digest)
+    logInfo(s"Primitive hash: $primitive_hash64")
 
     //finalize the hash
     var hashbytes = hash.digest
     var hashbytesenc = Base64.encodeBase64String(hashbytes)
     logInfo(s"Bytecode hash: $hashbytesenc")
-    Some(hashbytesenc)
+    //Some(hashbytesenc)
+
+    //merge bytecode and primitive hash
+    var merged = s"bc:${hashbytesenc}_pr:${primitive_hash64}"
+    Some(merged)
   }
 
   /**
