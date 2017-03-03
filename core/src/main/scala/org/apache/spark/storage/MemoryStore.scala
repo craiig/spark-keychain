@@ -28,6 +28,10 @@ import org.apache.spark.memory.MemoryManager
 import org.apache.spark.util.{SizeEstimator, Utils}
 import org.apache.spark.util.collection.SizeTrackingVector
 
+//for array hashing tests
+import java.security.MessageDigest
+import org.apache.commons.codec.binary.Base64
+
 private case class MemoryEntry(value: Any, size: Long, deserialized: Boolean)
 
 /**
@@ -92,10 +96,18 @@ private[spark] class MemoryStore(blockManager: BlockManager, memoryManager: Memo
     val bytes = _bytes.duplicate()
     bytes.rewind()
     if (level.deserialized) {
+      if(hashCachedBlocks){
+        hashArray(blockId, bytes);
+        bytes.rewind()
+      }
       val values = blockManager.dataDeserialize(blockId, bytes)
       putIterator(blockId, values, level, returnValues = true)
     } else {
       val droppedBlocks = new ArrayBuffer[(BlockId, BlockStatus)]
+      if(hashCachedBlocks){
+        hashArray(blockId, bytes);
+        bytes.rewind()
+      }
       tryToPut(blockId, bytes, bytes.limit, deserialized = false, droppedBlocks)
       PutResult(bytes.limit(), Right(bytes.duplicate()), droppedBlocks)
     }
@@ -122,6 +134,20 @@ private[spark] class MemoryStore(blockManager: BlockManager, memoryManager: Memo
     PutResult(size, data, droppedBlocks)
   }
 
+  private val hashCachedBlocks: Boolean =
+    conf.getBoolean("spark.storage.hashCachedBlocks", false)
+
+  def hashArray( blockId: BlockId, bytes:ByteBuffer ){
+    if(hashCachedBlocks){
+      val size = bytes.remaining
+      var hash = MessageDigest.getInstance("SHA-256")
+      hash.update(bytes);
+      var hashbytes = hash.digest;
+      var hashbytesenc = Base64.encodeBase64String(hashbytes)
+      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size}")
+    }
+  }
+
   override def putArray(
       blockId: BlockId,
       values: Array[Any],
@@ -131,10 +157,20 @@ private[spark] class MemoryStore(blockManager: BlockManager, memoryManager: Memo
     if (level.deserialized) {
       val sizeEstimate = SizeEstimator.estimate(values.asInstanceOf[AnyRef])
       tryToPut(blockId, values, sizeEstimate, deserialized = true, droppedBlocks)
+
+      if(hashCachedBlocks){
+        val bytes = blockManager.dataSerialize(blockId, values.iterator)
+        hashArray(blockId, bytes);
+      }
+
       PutResult(sizeEstimate, Left(values.iterator), droppedBlocks)
     } else {
       val bytes = blockManager.dataSerialize(blockId, values.iterator)
       tryToPut(blockId, bytes, bytes.limit, deserialized = false, droppedBlocks)
+      if(hashCachedBlocks){
+        bytes.rewind()
+        hashArray(blockId, bytes)
+      }
       PutResult(bytes.limit(), Right(bytes.duplicate()), droppedBlocks)
     }
   }
