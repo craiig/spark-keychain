@@ -340,6 +340,7 @@ private[spark] object ClosureCleaner extends Logging {
     
     //avoid loops
     if(visited contains func){
+      logTrace(s"returning early, ${func} already visited");
       return;
     }
     visited += func;
@@ -403,20 +404,31 @@ private[spark] object ClosureCleaner extends Logging {
         }
         else if(fldtype.isArray()){
           val Value:Array[_] = f.get(func).asInstanceOf[Array[_]]
+          if(Value != null){
+            val length = ReflectArray.getLength(Value)
+            val baseOffset = unsafe.arrayBaseOffset( fldtype );
+            val indexScale = unsafe.arrayIndexScale( fldtype );
+            logTrace(s"hashInputPrimitives:\tfield is array, value:${Value.mkString(",")} length: ${length} baseOffset: ${baseOffset} indexScale: ${indexScale}");
+            logTrace(s"hashInputPrimitives:\t\tadding to hash")
 
-          val length = ReflectArray.getLength(Value)
-          val baseOffset = unsafe.arrayBaseOffset( fldtype );
-          val indexScale = unsafe.arrayIndexScale( fldtype );
-          logTrace(s"hashInputPrimitives:\tfield is array, value:${Value.mkString(",")} length: ${length} baseOffset: ${baseOffset} indexScale: ${indexScale}");
-          logTrace(s"hashInputPrimitives:\t\tadding to hash")
+            // if this is an array of objects (not primitives),
+            // make sure we visit each one
+            if(Value.isInstanceOf[Array[Object]]){
+              for(p <- Value.asInstanceOf[Array[Object]]){
+                if(p != null){
+                  toVisit += p
+                }
+              }
+            }
 
-          //read the bytes of the array so that we don't have to infer type
-          // this has a problem in that reading bytes gives different byte ordering
-          // than reading int, double, etc, due to endianness
-          //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
-          for(i <- 0 to (indexScale*length-1) ){
-            //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
-            dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+            //read the bytes of the array so that we don't have to infer type
+            // this has a problem in that reading bytes gives different byte ordering
+            // than reading int, double, etc, due to endianness
+            //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
+            for(i <- 0 to (indexScale*length-1) ){
+              //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
+              dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+            }
           }
         } else {
           //if not primitive, recurse into and find it's primitives
@@ -426,6 +438,7 @@ private[spark] object ClosureCleaner extends Logging {
           if(p != null){
             logTrace(s"hashInputPrimitives:\t\tadding to visit list")
             toVisit += p
+            logTrace(s"visit list: ${toVisit.mkString(",")}")
             //hashInputPrimitives(p, dos, visited)
             //logTrace(s"hashInputPrimitives: class: ${cl.getName}")
           }
@@ -434,6 +447,7 @@ private[spark] object ClosureCleaner extends Logging {
     }
 
     for( p <- toVisit ){
+      logTrace(s"visiting ${p}")
       hashInputPrimitives(p, dos, visited)
     }
 
@@ -494,6 +508,8 @@ private[spark] object ClosureCleaner extends Logging {
    * spark contexts that may be in use
    */
   def hash(func: AnyRef): Option[String] = {
+    var hashStart = System.currentTimeMillis
+
     if (!isClosure(func.getClass)) {
       logInfo("Expected a closure; got " + func.getClass.getName)
       return None
@@ -520,6 +536,7 @@ private[spark] object ClosureCleaner extends Logging {
       logDebug(s"+++ hashing $clzname functions: ${ (cls._2, cls._3) }")
       hashClass(obj, hash, true, Set((cls._2, cls._3)) )
     }
+    var hashBytecodeStop = System.currentTimeMillis
 
     // Now we want to serialize & hash any referenced fields
     /* disable serialization hashing for now */
@@ -532,15 +549,20 @@ private[spark] object ClosureCleaner extends Logging {
     */
 
     //hash the primitives
+    var hashPrimitivesStart = System.currentTimeMillis
     val bos = new ByteArrayOutputStream()
     val dos = new DataOutputStream(bos)
     hashInputPrimitives( func, dos )
     dos.close()
     logTrace(s"Primitive Bytes: ${ bos.toByteArray.mkString(",") } ")
 
-    var primitiveHash = MessageDigest.getInstance("SHA-256")
-    primitiveHash.update(bos.toByteArray)
-    var primitive_hash64 = Base64.encodeBase64String(primitiveHash.digest)
+    var primitive_hash64 = if( bos.toByteArray.length > 0){
+      var primitiveHash = MessageDigest.getInstance("SHA-256")
+      primitiveHash.update(bos.toByteArray)
+      Base64.encodeBase64String(primitiveHash.digest)
+    } else {
+      "none"
+    }
     logInfo(s"Primitive hash: $primitive_hash64")
 
     //finalize the hash
@@ -551,6 +573,13 @@ private[spark] object ClosureCleaner extends Logging {
 
     //merge bytecode and primitive hash
     var merged = s"bc:${hashbytesenc}_pr:${primitive_hash64}"
+    logInfo(s"Merged hash: ${merged}")
+
+    var hashStop = System.currentTimeMillis
+    logInfo(s"Hashing took: ${hashStop - hashStart} ms")
+    logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ms")
+    logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ms")
+
     Some(merged)
   }
 
