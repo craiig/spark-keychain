@@ -48,7 +48,7 @@ class TaskContextSuite extends SparkFunSuite with BeforeAndAfter with LocalSpark
     TaskContextSuite.completed = false
     sc = new SparkContext("local", "test")
     val rdd = new RDD[String](sc, List()) {
-      override def getPartitions = Array[Partition](StubPartition(0))
+      override def getPartitions = Array[Partition](StubPartition(this, 0))
       override def compute(split: Partition, context: TaskContext) = {
         context.addTaskCompletionListener(context => TaskContextSuite.completed = true)
         sys.error("failed")
@@ -69,7 +69,7 @@ class TaskContextSuite extends SparkFunSuite with BeforeAndAfter with LocalSpark
     TaskContextSuite.lastError = null
     sc = new SparkContext("local", "test")
     val rdd = new RDD[String](sc, List()) {
-      override def getPartitions = Array[Partition](StubPartition(0))
+      override def getPartitions = Array[Partition](StubPartition(this, 0))
       override def compute(split: Partition, context: TaskContext) = {
         context.addTaskFailureListener((context, error) => TaskContextSuite.lastError = error)
         sys.error("damn error")
@@ -154,4 +154,4 @@ private object TaskContextSuite {
   @volatile var lastError: Throwable = _
 }
 
-private case class StubPartition(index: Int) extends Partition
+private case class StubPartition(val rdd: RDD[_], index: Int) extends Partition

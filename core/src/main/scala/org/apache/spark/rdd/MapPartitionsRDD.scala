@@ -19,19 +19,28 @@ package org.apache.spark.rdd
 
 import scala.reflect.ClassTag
 
+import org.apache.spark._
 import org.apache.spark.{Partition, TaskContext, SparkContext}
 import org.apache.commons.codec.binary.Base64
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
-private[spark] class MapPartition(val prev: Partition, val funcStr:Option[String])
-  extends Partition {
+private[spark] class MapPartition(val rdd: RDD[_], val prev: Partition, val funcStr:Option[String])
+  extends Partition with Logging {
   override val index: Int = prev.index
-  override def blockId(rdd:RDD[_]): BlockId = {
-   //if the funcStr was successfully hashed, use that hash
-   if (!funcStr.isEmpty){
-     val str = s"map { ${prev.blockId(rdd)}, ${funcStr.get}}"
+  override val blockId: BlockId = {
+   // we need to avoid problems by operating on non unique child blocks
+   // if the funcStr was successfully hashed, use that hash
+   val prevBlockID = prev.blockId
+   if( !funcStr.isEmpty && prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+     val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
      RDDUniqueBlockId(str) 
+   } else if( !funcStr.isEmpty && !prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+     val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
+     logInfo(s"RDD falling back to standard BlockId, prevBlockID parent: ${ prev.rdd.getClass().getName() }"
+       + s" UniqueBlockId would've been: ${str}")
+     RDDBlockId(rdd.id, index)
    } else {
+     logInfo(s"RDD falling back to standard BlockId because funcStr is empty, prevBlockID parent: ${ prev.rdd.getClass().getName() }")
      RDDBlockId(rdd.id, index)
    }
   }
@@ -53,13 +62,12 @@ private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
   val f_hash:Option[String] = if(!lambdaHash.isEmpty){
     Some(s"inner_${lambdaHash.get}_outer_${f_outerHash.get}")
   } else {
-    println("MapPartition innerhash was empty so fell back to clasic naming")
     None
   }
 
   override val partitioner = if (preservesPartitioning) firstParent[T].partitioner else None
 
-  override def getPartitions: Array[Partition] = firstParent[T].partitions.map( p => new MapPartition(p, f_hash) )
+  override def getPartitions: Array[Partition] = firstParent[T].partitions.map( p => new MapPartition(this, p, f_hash) )
 
   override def compute(split: Partition, context: TaskContext): Iterator[U] =
     f(context, split.index, firstParent[T].iterator(split.asInstanceOf[MapPartition].prev, context))

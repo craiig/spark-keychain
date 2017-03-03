@@ -52,19 +52,20 @@ import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 /**
  * A Spark split class that wraps around a Hadoop InputSplit.
  */
-private[spark] class HadoopPartition(rddId: Int, idx: Int, s: InputSplit)
+private[spark] class HadoopPartition(val rdd: RDD[_], idx: Int, s: InputSplit)
   extends Partition {
 
   val inputSplit = new SerializableWritable[InputSplit](s)
 
-  override def hashCode(): Int = 41 * (41 + rddId) + idx
+  override def hashCode(): Int = 41 * (41 + rdd.id) + idx
 
   override val index: Int = idx
+  //override val rdd: RDD[_] = rdd
 
-  override def blockId( rdd:RDD[_] ): BlockId = {
+  override val blockId: BlockId = {
     if (inputSplit.value.isInstanceOf[FileSplit]) {
       val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
-      RDDUniqueBlockId(is.getPath().toString())
+      RDDUniqueBlockId(is.getPath().toString()+s" ${index}")
     } else {
       RDDBlockId(rdd.id, index)
     }
@@ -209,7 +210,7 @@ class HadoopRDD[K, V](
     val inputSplits = inputFormat.getSplits(jobConf, minPartitions)
     val array = new Array[Partition](inputSplits.size)
     for (i <- 0 until inputSplits.size) {
-      array(i) = new HadoopPartition(id, i, inputSplits(i))
+      array(i) = new HadoopPartition(this, i, inputSplits(i))
     }
     array
   }

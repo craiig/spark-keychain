@@ -512,7 +512,7 @@ class CheckpointSuite extends SparkFunSuite with RDDCheckpointTester with LocalS
 }
 
 /** RDD partition that has large serialized size. */
-class FatPartition(val partition: Partition) extends Partition {
+class FatPartition(val rdd: RDD[_], val partition: Partition) extends Partition {
   val bigData = new Array[Byte](10000)
   def index: Int = partition.index
 }
@@ -522,7 +522,7 @@ class FatRDD(parent: RDD[Int]) extends RDD[Int](parent) {
   val bigData = new Array[Byte](100000)
 
   protected def getPartitions: Array[Partition] = {
-    parent.partitions.map(p => new FatPartition(p))
+    parent.partitions.map(p => new FatPartition(this, p))
   }
 
   def compute(split: Partition, context: TaskContext): Iterator[Int] = {
@@ -535,7 +535,7 @@ class FatPairRDD(parent: RDD[Int], _partitioner: Partitioner) extends RDD[(Int, 
   val bigData = new Array[Byte](100000)
 
   protected def getPartitions: Array[Partition] = {
-    parent.partitions.map(p => new FatPartition(p))
+    parent.partitions.map(p => new FatPartition(this, p))
   }
 
   @transient override val partitioner = Some(_partitioner)

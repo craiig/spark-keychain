@@ -237,8 +237,9 @@ abstract class RDD[T: ClassTag](
     checkpointRDD.map(_.partitions).getOrElse {
       if (partitions_ == null) {
         partitions_ = getPartitions
+        logInfo(s"rdd ${ this.getClass.getName } registering partitions");
         partitions.foreach( (p) => {
-          sc.env.blockManager.master.registerRDDusingBlockId( p.blockId(this), this.id );
+          sc.env.blockManager.master.registerRDDusingBlockId( p.blockId, this.id );
         })
       }
       partitions_

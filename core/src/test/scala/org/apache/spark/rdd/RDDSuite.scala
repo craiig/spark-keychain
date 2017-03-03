@@ -205,10 +205,9 @@ class RDDSuite extends SparkFunSuite with SharedSparkContext {
   }
 
   test("caching with failures") {
-    val onlySplit = new Partition { override def index: Int = 0 }
     var shouldFail = true
     val rdd = new RDD[Int](sc, Nil) {
-      override def getPartitions: Array[Partition] = Array(onlySplit)
+      override def getPartitions: Array[Partition] = Array( new Partition { override def rdd: RDD[_] = rdd; override def index: Int = 0 } )
       override val getDependencies = List[Dependency[_]]()
       override def compute(split: Partition, context: TaskContext): Iterator[Int] = {
         throw new Exception("injected failure")

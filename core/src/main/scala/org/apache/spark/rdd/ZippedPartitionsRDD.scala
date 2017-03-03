@@ -25,6 +25,7 @@ import org.apache.spark.{OneToOneDependency, Partition, SparkContext, TaskContex
 import org.apache.spark.util.Utils
 
 private[spark] class ZippedPartitionsPartition(
+    val rdd: RDD[_],
     idx: Int,
     @transient private val rdds: Seq[RDD[_]],
     @transient val preferredLocations: Seq[String])
@@ -61,7 +62,7 @@ private[spark] abstract class ZippedPartitionsBaseRDD[V: ClassTag](
       // Check whether there are any hosts that match all RDDs; otherwise return the union
       val exactMatchLocations = prefs.reduce((x, y) => x.intersect(y))
       val locs = if (!exactMatchLocations.isEmpty) exactMatchLocations else prefs.flatten.distinct
-      new ZippedPartitionsPartition(i, rdds, locs)
+      new ZippedPartitionsPartition(this, i, rdds, locs)
     }
   }
 

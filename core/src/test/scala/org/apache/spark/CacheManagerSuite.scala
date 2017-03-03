@@ -41,7 +41,7 @@ class CacheManagerSuite extends SparkFunSuite with LocalSparkContext with Before
     sc = new SparkContext("local", "test")
     blockManager = mock[BlockManager]
     cacheManager = new CacheManager(blockManager)
-    split = new Partition { override def index: Int = 0 }
+    split = new Partition { override def rdd:RDD[_] = null; override def index: Int = 0 }
     rdd = new RDD[Int](sc, Nil) {
       override def getPartitions: Array[Partition] = Array(split)
       override val getDependencies = List[Dependency[_]]()

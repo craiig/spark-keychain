@@ -164,7 +164,7 @@ class PipedRDDSuite extends SparkFunSuite with SharedSparkContext {
     if (testCommandAvailable("printenv")) {
       val nums = new HadoopRDD(sc, new JobConf(), classOf[TextInputFormat], classOf[LongWritable],
         classOf[Text], 2) {
-        override def getPartitions: Array[Partition] = Array(generateFakeHadoopPartition())
+        override def getPartitions: Array[Partition] = Array(generateFakeHadoopPartition(this))
 
         override val getDependencies = List[Dependency[_]]()
 
@@ -173,7 +173,7 @@ class PipedRDDSuite extends SparkFunSuite with SharedSparkContext {
             new Text("b"))))
         }
       }
-      val hadoopPart1 = generateFakeHadoopPartition()
+      val hadoopPart1 = generateFakeHadoopPartition(nums)
       val pipedRdd = new PipedRDD(nums, "printenv " + varName)
       val tContext = TaskContext.empty()
       val rddIter = pipedRdd.compute(hadoopPart1, tContext)
@@ -184,10 +184,10 @@ class PipedRDDSuite extends SparkFunSuite with SharedSparkContext {
     }
   }
 
-  def generateFakeHadoopPartition(): HadoopPartition = {
+  def generateFakeHadoopPartition(rdd:RDD[_]): HadoopPartition = {
     val split = new FileSplit(new Path("/some/path"), 0, 1,
       Array[String]("loc1", "loc2", "loc3", "loc4", "loc5"))
-    new HadoopPartition(sc.newRddId(), 1, split)
+    new HadoopPartition(rdd, 1, split)
   }
 
 }

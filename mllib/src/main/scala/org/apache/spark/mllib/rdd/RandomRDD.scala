@@ -27,7 +27,9 @@ import org.apache.spark.storage.{BlockId, RDDUniqueBlockId}
 import scala.reflect.ClassTag
 import scala.util.Random
 
-private[mllib] class RandomRDDPartition[T](override val index: Int,
+private[mllib] class RandomRDDPartition[T](
+    val rdd: RDD[_],
+    override val index: Int,
     val size: Int,
     val generator: RandomDataGenerator[T],
     val seed: Long) extends Partition {
@@ -36,9 +38,9 @@ private[mllib] class RandomRDDPartition[T](override val index: Int,
 
   /* data is a function of the size, generator, and seed used
    * we don't even need to include the partition index */
-  def uniquename:String = s"randomRDD_size=${size}_gen=${generator.getClass.getName}_seed=${seed}"
+  def uniquename:String = s"randomRDD_size=${size}_gen=${generator.getClass.getName}_seed=${seed}_${index}"
 
-  override def blockId(rdd:RDD[_]): BlockId = {
+  override val blockId: BlockId = {
     RDDUniqueBlockId(uniquename)
   }
 }
@@ -61,7 +63,7 @@ private[mllib] class RandomRDD[T: ClassTag](sc: SparkContext,
   }
 
   override def getPartitions: Array[Partition] = {
-    RandomRDD.getPartitions(size, numPartitions, rng, seed)
+    RandomRDD.getPartitions(this, size, numPartitions, rng, seed)
   }
 }
 
@@ -84,13 +86,15 @@ private[mllib] class RandomVectorRDD(sc: SparkContext,
   }
 
   override protected def getPartitions: Array[Partition] = {
-    RandomRDD.getPartitions(size, numPartitions, rng, seed)
+    RandomRDD.getPartitions(this, size, numPartitions, rng, seed)
   }
 }
 
 private[mllib] object RandomRDD {
 
-  def getPartitions[T](size: Long,
+  def getPartitions[T](
+      rdd: RDD[_],
+      size: Long,
       numPartitions: Int,
       rng: RandomDataGenerator[T],
       seed: Long): Array[Partition] = {
@@ -102,7 +106,7 @@ private[mllib] object RandomRDD {
     val random = new Random(seed)
     while (i < numPartitions) {
       end = ((i + 1) * size) / numPartitions
-      partitions(i) = new RandomRDDPartition(i, (end - start).toInt, rng, random.nextLong())
+      partitions(i) = new RandomRDDPartition(rdd, i, (end - start).toInt, rng, random.nextLong())
       start = end
       i += 1
     }

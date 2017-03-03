@@ -27,7 +27,7 @@ import org.apache.spark.{Partition, TaskContext}
 
 @deprecated("Replaced by PartitionwiseSampledRDDPartition", "1.0.0")
 private[spark]
-class SampledRDDPartition(val prev: Partition, val seed: Int) extends Partition with Serializable {
+class SampledRDDPartition(val rdd:RDD[_], val prev: Partition, val seed: Int) extends Partition with Serializable {
   override val index: Int = prev.index
 }
 
@@ -41,7 +41,7 @@ private[spark] class SampledRDD[T: ClassTag](
 
   override def getPartitions: Array[Partition] = {
     val rg = new Random(seed)
-    firstParent[T].partitions.map(x => new SampledRDDPartition(x, rg.nextInt))
+    firstParent[T].partitions.map(x => new SampledRDDPartition(this, x, rg.nextInt))
   }
 
   override def getPreferredLocations(split: Partition): Seq[String] =

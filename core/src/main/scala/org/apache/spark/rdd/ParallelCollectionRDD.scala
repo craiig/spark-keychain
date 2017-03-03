@@ -30,11 +30,12 @@ import org.apache.spark.serializer.JavaSerializer
 import org.apache.spark.util.Utils
 
 private[spark] class ParallelCollectionPartition[T: ClassTag](
-    var rddId: Long,
+    var rdd: RDD[_],
     var slice: Int,
     var values: Seq[T])
     extends Partition with Serializable {
 
+  var rddId:Long = rdd.id
   def iterator: Iterator[T] = values.iterator
 
   override def hashCode(): Int = (41 * (41 + rddId) + slice).toInt
@@ -95,7 +96,7 @@ private[spark] class ParallelCollectionRDD[T: ClassTag](
 
   override def getPartitions: Array[Partition] = {
     val slices = ParallelCollectionRDD.slice(data, numSlices).toArray
-    slices.indices.map(i => new ParallelCollectionPartition(id, i, slices(i))).toArray
+    slices.indices.map(i => new ParallelCollectionPartition(this, i, slices(i))).toArray
   }
 
   override def compute(s: Partition, context: TaskContext): Iterator[T] = {

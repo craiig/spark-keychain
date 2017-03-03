@@ -39,17 +39,19 @@ import org.apache.spark.storage.StorageLevel
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class NewHadoopPartition(
-    rddId: Int,
+    val rdd: RDD[_],
     val index: Int,
     rawSplit: InputSplit with Writable,
     blockIdFunc: Option[(RDD[_], InputSplit) => BlockId] = None
     )
   extends Partition {
 
+  val rddId = rdd.id;
+
   val serializableHadoopSplit = new SerializableWritable(rawSplit)
   override def hashCode(): Int = 41 * (41 + rddId) + index
 
-  override def blockId( rdd:RDD[_] ): BlockId = {
+  override val blockId: BlockId = {
     blockIdFunc.getOrElse((rdd:RDD[_], is:InputSplit) => {
       RDDBlockId(rdd.id, index)
     })( rdd, serializableHadoopSplit.value )
@@ -130,7 +132,7 @@ class NewHadoopRDD[K, V](
     val rawSplits = inputFormat.getSplits(jobContext).toArray
     val result = new Array[Partition](rawSplits.size)
     for (i <- 0 until rawSplits.size) {
-      result(i) = new NewHadoopPartition(id, i, rawSplits(i).asInstanceOf[InputSplit with Writable], blockIdFunc)
+      result(i) = new NewHadoopPartition(this, i, rawSplits(i).asInstanceOf[InputSplit with Writable], blockIdFunc)
     }
     result
   }

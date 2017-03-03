@@ -27,7 +27,7 @@ import org.apache.spark.api.java.{JavaRDD, JavaSparkContext}
 import org.apache.spark.util.NextIterator
 import org.apache.spark.{Logging, Partition, SparkContext, TaskContext}
 
-private[spark] class JdbcPartition(idx: Int, val lower: Long, val upper: Long) extends Partition {
+private[spark] class JdbcPartition(val rdd: RDD[_], idx: Int, val lower: Long, val upper: Long) extends Partition {
   override def index: Int = idx
 }
 
@@ -67,7 +67,7 @@ class JdbcRDD[T: ClassTag](
     (0 until numPartitions).map(i => {
       val start = lowerBound + ((i * length) / numPartitions)
       val end = lowerBound + (((i + 1) * length) / numPartitions) - 1
-      new JdbcPartition(i, start.toLong, end.toLong)
+      new JdbcPartition(this, i, start.toLong, end.toLong)
     }).toArray
   }
 

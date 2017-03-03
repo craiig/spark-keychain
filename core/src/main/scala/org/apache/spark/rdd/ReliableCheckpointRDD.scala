@@ -75,7 +75,7 @@ private[spark] class ReliableCheckpointRDD[T: ClassTag](
         throw new SparkException(s"Invalid checkpoint file: $path")
       }
     }
-    Array.tabulate(inputFiles.length)(i => new CheckpointRDDPartition(i))
+    Array.tabulate(inputFiles.length)(i => new CheckpointRDDPartition(this, i))
   }
 
   /**

@@ -57,7 +57,7 @@ private[spark] case class NarrowCoGroupSplitDep(
  *                   narrowDeps should always be equal to the number of parents.
  */
 private[spark] class CoGroupPartition(
-    idx: Int, val narrowDeps: Array[Option[NarrowCoGroupSplitDep]])
+    val rdd: RDD[_], idx: Int, val narrowDeps: Array[Option[NarrowCoGroupSplitDep]])
   extends Partition with Serializable {
   override val index: Int = idx
   override def hashCode(): Int = idx
@@ -112,7 +112,7 @@ class CoGroupedRDD[K: ClassTag](
     val array = new Array[Partition](part.numPartitions)
     for (i <- 0 until array.length) {
       // Each CoGroupPartition will have a dependency per contributing RDD
-      array(i) = new CoGroupPartition(i, rdds.zipWithIndex.map { case (rdd, j) =>
+      array(i) = new CoGroupPartition(this, i, rdds.zipWithIndex.map { case (rdd, j) =>
         // Assume each RDD contributed a single dependency, and get it
         dependencies(j) match {
           case s: ShuffleDependency[_, _, _] =>

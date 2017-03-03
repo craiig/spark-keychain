@@ -23,7 +23,7 @@ import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.serializer.Serializer
 
-private[spark] class ShuffledRDDPartition(val idx: Int) extends Partition {
+private[spark] class ShuffledRDDPartition(val rdd: RDD[_], val idx: Int) extends Partition {
   override val index: Int = idx
   override def hashCode(): Int = idx
 }
@@ -83,7 +83,7 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
   override val partitioner = Some(part)
 
   override def getPartitions: Array[Partition] = {
-    Array.tabulate[Partition](part.numPartitions)(i => new ShuffledRDDPartition(i))
+    Array.tabulate[Partition](part.numPartitions)(i => new ShuffledRDDPartition(this, i))
   }
 
   override protected def getPreferredLocations(partition: Partition): Seq[String] = {
