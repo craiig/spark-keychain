@@ -336,7 +336,8 @@ abstract class RDD[T: ClassTag](
    */
   def flatMap[U: ClassTag](f: T => TraversableOnce[U]): RDD[U] = withScope {
     val cleanF = sc.clean(f)
-    new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.flatMap(cleanF))
+    var hash = sc.hash(cleanF)
+    new MapPartitionsRDD[U, T](this, (context, pid, iter) => iter.flatMap(cleanF), lambdaHash=hash)
   }
 
   /**
@@ -344,10 +345,11 @@ abstract class RDD[T: ClassTag](
    */
   def filter(f: T => Boolean): RDD[T] = withScope {
     val cleanF = sc.clean(f)
+    var hash = sc.hash(cleanF)
     new MapPartitionsRDD[T, T](
       this,
       (context, pid, iter) => iter.filter(cleanF),
-      preservesPartitioning = true)
+      preservesPartitioning = true, lambdaHash=hash)
   }
 
   /**
@@ -601,7 +603,7 @@ abstract class RDD[T: ClassTag](
    * Return an RDD created by coalescing all elements within each partition into an array.
    */
   def glom(): RDD[Array[T]] = withScope {
-    new MapPartitionsRDD[Array[T], T](this, (context, pid, iter) => Iterator(iter.toArray))
+    new MapPartitionsRDD[Array[T], T](this, (context, pid, iter) => Iterator(iter.toArray), lambdaHash=Some("glom"))
   }
 
   /**
@@ -710,10 +712,11 @@ abstract class RDD[T: ClassTag](
       f: Iterator[T] => Iterator[U],
       preservesPartitioning: Boolean = false): RDD[U] = withScope {
     val cleanedF = sc.clean(f)
+    var hash = sc.hash(cleanedF)
     new MapPartitionsRDD(
       this,
       (context: TaskContext, index: Int, iter: Iterator[T]) => cleanedF(iter),
-      preservesPartitioning)
+      preservesPartitioning, lambdaHash=hash)
   }
 
   /**
@@ -728,10 +731,11 @@ abstract class RDD[T: ClassTag](
   private[spark] def mapPartitionsInternal[U: ClassTag](
       f: Iterator[T] => Iterator[U],
       preservesPartitioning: Boolean = false): RDD[U] = withScope {
+    var hash = sc.hash(f)
     new MapPartitionsRDD(
       this,
       (context: TaskContext, index: Int, iter: Iterator[T]) => f(iter),
-      preservesPartitioning)
+      preservesPartitioning, lambdaHash=hash)
   }
 
   /**
@@ -745,10 +749,11 @@ abstract class RDD[T: ClassTag](
       f: (Int, Iterator[T]) => Iterator[U],
       preservesPartitioning: Boolean = false): RDD[U] = withScope {
     val cleanedF = sc.clean(f)
+    var hash = sc.hash(cleanedF)
     new MapPartitionsRDD(
       this,
       (context: TaskContext, index: Int, iter: Iterator[T]) => cleanedF(index, iter),
-      preservesPartitioning)
+      preservesPartitioning, lambdaHash=hash)
   }
 
   /**
@@ -765,8 +770,9 @@ abstract class RDD[T: ClassTag](
       f: (TaskContext, Iterator[T]) => Iterator[U],
       preservesPartitioning: Boolean = false): RDD[U] = withScope {
     val cleanF = sc.clean(f)
+    var hash = sc.hash(cleanF)
     val func = (context: TaskContext, index: Int, iter: Iterator[T]) => cleanF(context, iter)
-    new MapPartitionsRDD(this, sc.clean(func), preservesPartitioning)
+    new MapPartitionsRDD(this, sc.clean(func), preservesPartitioning, lambdaHash=Some(hash+"taskcontext"))
   }
 
   /**

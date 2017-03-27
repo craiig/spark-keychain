@@ -21,19 +21,42 @@ import java.io.{IOException, ObjectOutputStream}
 
 import scala.reflect.ClassTag
 
+import org.apache.spark.{SparkException, Logging}
 import org.apache.spark.{OneToOneDependency, Partition, SparkContext, TaskContext}
 import org.apache.spark.util.Utils
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class ZippedPartitionsPartition(
     val rdd: RDD[_],
     idx: Int,
     @transient private val rdds: Seq[RDD[_]],
     @transient val preferredLocations: Seq[String])
-  extends Partition {
+  extends Partition with Logging {
 
   override val index: Int = idx
   var partitionValues = rdds.map(rdd => rdd.partitions(idx))
+  @transient var partitionBlockIds = rdds.map(rdd => rdd.partitions(idx).blockId)
   def partitions: Seq[Partition] = partitionValues
+
+  override val blockId: BlockId = {
+    //if all parent rdds are unique rdds then we can be too
+    val rddIsUnique = partitionBlockIds.map( (p) => p match {
+      case RDDUniqueBlockId(_) => true
+      case RDDBlockId(_,_) => false
+      case _ => throw new SparkException("Unexpected blockId type")
+    })
+    val canBeUnique = rddIsUnique.foldLeft(true)( _ && _ )
+    if( canBeUnique){
+      var str = s"zip { ${partitionBlockIds.mkString(",")}, ${index}"
+      RDDUniqueBlockId(str)
+    } else {
+      logInfo(s"RDD zip falling back to standard block id: "
+        + s"rdd parents: ${rddIsUnique.mkString(",")}"
+        + s" callsite: ${rdd.getCreationSite}"
+        )
+      RDDBlockId(rdd.id, index)
+    }
+  }
 
   @throws(classOf[IOException])
   private def writeObject(oos: ObjectOutputStream): Unit = Utils.tryOrIOException {

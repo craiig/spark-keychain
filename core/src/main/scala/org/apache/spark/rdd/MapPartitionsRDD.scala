@@ -37,10 +37,12 @@ private[spark] class MapPartition(val rdd: RDD[_], val prev: Partition, val func
    } else if( !funcStr.isEmpty && !prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
      val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
      logInfo(s"RDD falling back to standard BlockId, prevBlockID parent: ${ prev.rdd.getClass().getName() }"
+       + s" callsite: ${ prev.rdd.getCreationSite }"
        + s" UniqueBlockId would've been: ${str}")
      RDDBlockId(rdd.id, index)
    } else {
-     logInfo(s"RDD falling back to standard BlockId because funcStr is empty, prevBlockID parent: ${ prev.rdd.getClass().getName() }")
+     logInfo(s"RDD falling back to standard BlockId because funcStr is empty, prevBlockID parent: ${ prev.rdd.getClass().getName() }"
+       + s" callsite: ${ prev.rdd.getCreationSite }")
      RDDBlockId(rdd.id, index)
    }
   }

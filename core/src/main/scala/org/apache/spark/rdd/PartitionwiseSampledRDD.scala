@@ -21,14 +21,30 @@ import java.util.Random
 
 import scala.reflect.ClassTag
 
-import org.apache.spark.{Partition, TaskContext}
+import org.apache.spark.{Partition, TaskContext, Logging}
 import org.apache.spark.util.random.RandomSampler
 import org.apache.spark.util.Utils
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark]
 class PartitionwiseSampledRDDPartition(val rdd: RDD[_], val prev: Partition, val seed: Long)
-  extends Partition with Serializable {
+  extends Partition with Serializable with Logging {
   override val index: Int = prev.index
+
+  override val blockId: BlockId = {
+    val prevBlockID = prev.blockId
+    if( prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+      /* index is encoded by prevBlockId */
+      val str = s"PartitionwiseSampledRDD{ seed:${seed}, prev:${prevBlockID} }"
+      RDDUniqueBlockId(str);
+    } else {
+      logInfo(s"PartitionwiseSampledRDDPartition falling back to standard block id: "
+        + s"rdd parent: ${prev.rdd.getClass().getName()}"
+        + s" callsite: ${rdd.getCreationSite}"
+        )
+      RDDBlockId(rdd.id, index);
+    }
+  }
 }
 
 /**
