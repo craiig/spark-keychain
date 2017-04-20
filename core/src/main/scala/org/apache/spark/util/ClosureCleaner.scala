@@ -24,7 +24,7 @@ import java.lang.reflect.Modifier
 import java.lang.reflect.{Array => ReflectArray};
 import java.nio.ByteBuffer;
 
-import scala.collection.mutable.{Map, Set, SortedSet}
+import scala.collection.mutable.{Map, Set, SortedSet, Queue}
 import scala.collection.JavaConverters._
 
 import org.objectweb.asm.{ClassReader, ClassVisitor, MethodVisitor, Type, Label, Handle}
@@ -345,7 +345,7 @@ private[spark] object ClosureCleaner extends Logging {
     }
     visited += func;
 
-    val toVisit = Set[AnyRef]()
+    val toVisit = Queue[AnyRef]() //Queue is ordered?
 
     var cl = clz;
     if(cl == null){
@@ -372,7 +372,7 @@ private[spark] object ClosureCleaner extends Logging {
         val offset = unsafe.objectFieldOffset( f )
         //if primitive, grab value
         if(primitive && !fldtype.isArray()){
-          logTrace(s"hashInputPrimitives:\t\tadding to hash")
+          logTrace(s"hashInputPrimitives:\t\tadding to hash (primitive)")
           if( fldtype == classOf[Byte] ){
             //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset) )
             writeBytes(dos, func, offset, 1)
@@ -409,25 +409,28 @@ private[spark] object ClosureCleaner extends Logging {
             val baseOffset = unsafe.arrayBaseOffset( fldtype );
             val indexScale = unsafe.arrayIndexScale( fldtype );
             logTrace(s"hashInputPrimitives:\tfield is array, value:${Value.mkString(",")} length: ${length} baseOffset: ${baseOffset} indexScale: ${indexScale}");
-            logTrace(s"hashInputPrimitives:\t\tadding to hash")
+            logTrace(s"hashInputPrimitives:\t\tadding to hash (array)")
 
             // if this is an array of objects (not primitives),
             // make sure we visit each one
             if(Value.isInstanceOf[Array[Object]]){
+              logTrace(s"hashInputPrimitives:\t\twriting objects")
               for(p <- Value.asInstanceOf[Array[Object]]){
                 if(p != null){
                   toVisit += p
                 }
               }
-            }
-
-            //read the bytes of the array so that we don't have to infer type
-            // this has a problem in that reading bytes gives different byte ordering
-            // than reading int, double, etc, due to endianness
-            //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
-            for(i <- 0 to (indexScale*length-1) ){
-              //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
-              dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+            } else {
+              logTrace(s"hashInputPrimitives:\t\twriting raw bytes")
+              //primitive arrays get visited directly??
+              //read the bytes of the array so that we don't have to infer type
+              // this has a problem in that reading bytes gives different byte ordering
+              // than reading int, double, etc, due to endianness
+              //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
+              for(i <- 0 to (indexScale*length-1) ){
+                //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
+                dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+              }
             }
           }
         } else {
@@ -507,6 +510,7 @@ private[spark] object ClosureCleaner extends Logging {
    * so that it's functionality can be summarized as a hash, used for comparison between different
    * spark contexts that may be in use
    */
+  var hashCache: Map[String, Array[Byte]] = Map.empty
   def hash(func: AnyRef): Option[String] = {
     var hashStart = System.currentTimeMillis
 
@@ -519,22 +523,34 @@ private[spark] object ClosureCleaner extends Logging {
     }
     logDebug(s"+++ Hashing closure $func (${func.getClass.getName}) +++")
 
-    var classesToVisit = getFunctionsCalled(func)
-    logDebug(s"+++ All classes to visit: $classesToVisit")
+    /* first check to see if we've already hash the given ref */
+    var hashbytes:Array[Byte] = hashCache get func.getClass.getName match {
+      case Some(result) => {
+        logInfo("Hash Cache hit for: " + func.getClass.getName)
+        result
+      }
+      case None => {
+          logInfo("Hash Cache miss for: " + func.getClass.getName)
+          var classesToVisit = getFunctionsCalled(func)
+          logDebug(s"+++ All classes to visit: $classesToVisit")
+          /* hash the given function */
+          var hash = MessageDigest.getInstance("SHA-256")
 
-    /* hash the given function */
-    var hash = MessageDigest.getInstance("SHA-256")
+          hashClass(func, hash, true)  //true = anonymize function
 
-    hashClass(func, hash, true)  //true = anonymize function
-
-    /* hash the bytecode of all functions that this function calls */
-    /* todo rewrite this so we only call it once per class */
-    for( cls <- classesToVisit ){
-      var clzname = cls._1.replace('/', '.')
-      var obj = Class.forName( clzname,
-        false, Thread.currentThread.getContextClassLoader)
-      logDebug(s"+++ hashing $clzname functions: ${ (cls._2, cls._3) }")
-      hashClass(obj, hash, true, Set((cls._2, cls._3)) )
+          /* hash the bytecode of all functions that this function calls */
+          /* todo rewrite this so we only call it once per class */
+          for( cls <- classesToVisit ){
+            var clzname = cls._1.replace('/', '.')
+            var obj = Class.forName( clzname,
+            false, Thread.currentThread.getContextClassLoader)
+            logDebug(s"+++ hashing $clzname functions: ${ (cls._2, cls._3) }")
+            hashClass(obj, hash, true, Set((cls._2, cls._3)) )
+          }
+          val digest = hash.digest
+          hashCache(func.getClass.getName) = digest
+          digest
+      }
     }
     var hashBytecodeStop = System.currentTimeMillis
 
@@ -566,7 +582,6 @@ private[spark] object ClosureCleaner extends Logging {
     logInfo(s"Primitive hash: $primitive_hash64")
 
     //finalize the hash
-    var hashbytes = hash.digest
     var hashbytesenc = Base64.encodeBase64String(hashbytes)
     logInfo(s"Bytecode hash: $hashbytesenc")
     //Some(hashbytesenc)
@@ -576,9 +591,9 @@ private[spark] object ClosureCleaner extends Logging {
     logInfo(s"Merged hash: ${merged}")
 
     var hashStop = System.currentTimeMillis
-    logInfo(s"Hashing took: ${hashStop - hashStart} ms")
-    logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ms")
-    logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ms")
+    logInfo(s"Hashing took: ${hashStop - hashStart} ms closure:${func.getClass.getName}")
+    logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ms closure:${func.getClass.getName}")
+    logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ms closure:${func.getClass.getName}")
 
     Some(merged)
   }
