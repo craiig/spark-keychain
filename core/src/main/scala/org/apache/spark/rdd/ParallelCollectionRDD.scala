@@ -28,9 +28,13 @@ import scala.reflect.ClassTag
 import org.apache.spark._
 import org.apache.spark.serializer.JavaSerializer
 import org.apache.spark.util.Utils
+import java.security.MessageDigest
+import org.apache.commons.codec.binary.Base64
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class ParallelCollectionPartition[T: ClassTag](
     var rdd: RDD[_],
+    @transient var datahash: String,
     var slice: Int,
     var values: Seq[T])
     extends Partition with Serializable {
@@ -44,6 +48,10 @@ private[spark] class ParallelCollectionPartition[T: ClassTag](
     case that: ParallelCollectionPartition[_] =>
       this.rddId == that.rddId && this.slice == that.slice
     case _ => false
+  }
+
+  override val blockId: BlockId = {
+    RDDUniqueBlockId(s"parallelcollection{ ${datahash}, ${slice} }")
   }
 
   override def index: Int = slice
@@ -95,8 +103,20 @@ private[spark] class ParallelCollectionRDD[T: ClassTag](
   // UPDATE: A parallel collection can be checkpointed to HDFS, which achieves this goal.
 
   override def getPartitions: Array[Partition] = {
+    /* calculate a hash over the contents of the sequence */
+    val data_hash = {
+      /* serialize the entire collection */
+      val bos = new ByteArrayOutputStream()
+      val out = new ObjectOutputStream(bos)
+      out.writeObject(data)
+      out.close()
+      var hasher = MessageDigest.getInstance("SHA-256")
+      hasher.update( bos.toByteArray )
+      Base64.encodeBase64String(hasher.digest)
+    }
+    logInfo(s"calculated data_hash: ${data_hash}")
     val slices = ParallelCollectionRDD.slice(data, numSlices).toArray
-    slices.indices.map(i => new ParallelCollectionPartition(this, i, slices(i))).toArray
+    slices.indices.map(i => new ParallelCollectionPartition(this, data_hash, i, slices(i))).toArray
   }
 
   override def compute(s: Partition, context: TaskContext): Iterator[T] = {

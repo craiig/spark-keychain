@@ -22,10 +22,37 @@ import scala.reflect.ClassTag
 import org.apache.spark._
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.serializer.Serializer
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
-private[spark] class ShuffledRDDPartition(val rdd: RDD[_], val idx: Int) extends Partition {
+private[spark] class ShuffledRDDPartition(val rdd: RDD[_], val idx: Int,
+  val part: Partitioner, val prev: RDD[_]) extends Partition with Logging {
   override val index: Int = idx
   override def hashCode(): Int = idx
+  override val blockId: BlockId = {
+    //val prevBlockID = prev.blockId
+    val prevBlockID = prev.partitions(0).blockId;
+    /* ^^ problem here is that for 1:1 dependencies we can get a prev partition
+     * but with shuffles we don't have that, just a dependency on every exiting
+     * patition the best solution so far here is to just refactor so we can
+     * query an RDD for a name and all partitions from that rdd add _idx to
+     * that name,
+     *
+     * a hacky solution for now is to just use the first partition of the
+     * previous rdd as a dependency and see how far we get
+     * */
+    if( prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+      /* index is not encoded by prev because we are shuffling */
+      val part_name = s"${part.getClass.getName}:${part.hashCode}"
+      val str = s"ShuffledRDD{ part:${part_name}, idx:${idx}, prev:${prevBlockID}}}"
+      RDDUniqueBlockId(str);
+    } else {
+      logInfo(s"ShuffledRDD falling back to standard block id: "
+        + s"rdd parent: ${prev.getClass().getName()}"
+        + s" callsite: ${rdd.getCreationSite}"
+        )
+      RDDBlockId(rdd.id, index);
+    }
+  }
 }
 
 /**
@@ -83,7 +110,7 @@ class ShuffledRDD[K: ClassTag, V: ClassTag, C: ClassTag](
   override val partitioner = Some(part)
 
   override def getPartitions: Array[Partition] = {
-    Array.tabulate[Partition](part.numPartitions)(i => new ShuffledRDDPartition(this, i))
+    Array.tabulate[Partition](part.numPartitions)(i => new ShuffledRDDPartition(this, i, part, prev))
   }
 
   override protected def getPreferredLocations(partition: Partition): Seq[String] = {

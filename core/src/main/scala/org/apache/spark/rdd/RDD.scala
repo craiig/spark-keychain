@@ -176,6 +176,7 @@ abstract class RDD[T: ClassTag](
    * have a storage level set yet. Local checkpointing is an exception.
    */
   def persist(newLevel: StorageLevel): this.type = {
+    logInfo(s"persisting ${this.getClass.getName} to ${newLevel}")
     if (isLocallyCheckpointed) {
       // This means the user previously called localCheckpoint(), which should have already
       // marked this RDD for persisting. Here we should override the old storage level with
