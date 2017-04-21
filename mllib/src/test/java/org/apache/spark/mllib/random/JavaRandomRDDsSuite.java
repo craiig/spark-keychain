@@ -276,6 +276,10 @@ class StringGenerator implements RandomDataGenerator<String>, Serializable {
     return new StringGenerator();
   }
   @Override
+  public String getHLS() {
+    return "";
+  }
+  @Override
   public void setSeed(long seed) {
   }
 }
