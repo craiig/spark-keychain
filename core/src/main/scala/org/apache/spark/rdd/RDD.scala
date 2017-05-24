@@ -240,7 +240,7 @@ abstract class RDD[T: ClassTag](
         partitions_ = getPartitions
         logInfo(s"rdd ${ this.getClass.getName } registering partitions");
         partitions.foreach( (p) => {
-          sc.env.blockManager.master.registerRDDusingBlockId( p.blockId, this.id );
+          sc.env.blockManager.master.registerRDDusingBlockId( p.getBlockId(this), this.id );
         })
       }
       partitions_

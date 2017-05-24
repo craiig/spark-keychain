@@ -50,8 +50,8 @@ private[spark] class ParallelCollectionPartition[T: ClassTag](
     case _ => false
   }
 
-  override val blockId: BlockId = {
-    RDDUniqueBlockId(s"parallelcollection{ ${datahash}, ${slice} }")
+  override val blockId: Option[BlockId] = {
+    Some(RDDUniqueBlockId(s"parallelcollection{ ${datahash}, ${slice} }"))
   }
 
   override def index: Int = slice

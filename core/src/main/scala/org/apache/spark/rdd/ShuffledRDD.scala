@@ -28,7 +28,7 @@ private[spark] class ShuffledRDDPartition(val rdd: RDD[_], val idx: Int,
   val part: Partitioner, val prev: RDD[_]) extends Partition with Logging {
   override val index: Int = idx
   override def hashCode(): Int = idx
-  override val blockId: BlockId = {
+  override val blockId: Option[BlockId] = {
     //val prevBlockID = prev.blockId
     val prevBlockID = prev.partitions(0).blockId;
     /* ^^ problem here is that for 1:1 dependencies we can get a prev partition
@@ -40,17 +40,17 @@ private[spark] class ShuffledRDDPartition(val rdd: RDD[_], val idx: Int,
      * a hacky solution for now is to just use the first partition of the
      * previous rdd as a dependency and see how far we get
      * */
-    if( prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+    if( !prevBlockID.isEmpty && prevBlockID.get.isInstanceOf[RDDUniqueBlockId] ){
       /* index is not encoded by prev because we are shuffling */
       val part_name = s"${part.getClass.getName}:${part.hashCode}"
       val str = s"ShuffledRDD{ part:${part_name}, idx:${idx}, prev:${prevBlockID}}}"
-      RDDUniqueBlockId(str);
+      Some(RDDUniqueBlockId(str))
     } else {
       logInfo(s"ShuffledRDD falling back to standard block id: "
         + s"rdd parent: ${prev.getClass().getName()}"
         + s" callsite: ${rdd.getCreationSite}"
         )
-      RDDBlockId(rdd.id, index);
+      Some(RDDBlockId(rdd.id, index))
     }
   }
 }

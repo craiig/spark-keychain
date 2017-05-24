@@ -86,6 +86,7 @@ private[sql] class CacheManager extends Logging {
     if (lookupCachedData(planToCache).nonEmpty) {
       logWarning("Asked to cache already cached data.")
     } else {
+      logInfo(s"Caching query: ${planToCache.simpleString}")
       val sqlContext = query.sqlContext
       cachedData +=
         CachedData(

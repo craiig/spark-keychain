@@ -35,10 +35,10 @@ private[spark] class ZippedPartitionsPartition(
 
   override val index: Int = idx
   var partitionValues = rdds.map(rdd => rdd.partitions(idx))
-  @transient var partitionBlockIds = rdds.map(rdd => rdd.partitions(idx).blockId)
+  @transient var partitionBlockIds = rdds.map(rdd => rdd.partitions(idx).getBlockId(rdd))
   def partitions: Seq[Partition] = partitionValues
 
-  override val blockId: BlockId = {
+  override val blockId: Option[BlockId] = {
     //if all parent rdds are unique rdds then we can be too
     val rddIsUnique = partitionBlockIds.map( (p) => p match {
       case RDDUniqueBlockId(_) => true
@@ -48,13 +48,13 @@ private[spark] class ZippedPartitionsPartition(
     val canBeUnique = rddIsUnique.foldLeft(true)( _ && _ )
     if( canBeUnique){
       var str = s"zip { ${partitionBlockIds.mkString(",")}, ${index}"
-      RDDUniqueBlockId(str)
+      Some(RDDUniqueBlockId(str))
     } else {
       logInfo(s"RDD zip falling back to standard block id: "
         + s"rdd parents: ${rddIsUnique.mkString(",")}"
         + s" callsite: ${rdd.getCreationSite}"
         )
-      RDDBlockId(rdd.id, index)
+      Some(RDDBlockId(rdd.id, index))
     }
   }
 

@@ -62,12 +62,12 @@ private[spark] class HadoopPartition(val rdd: RDD[_], idx: Int, s: InputSplit)
   override val index: Int = idx
   //override val rdd: RDD[_] = rdd
 
-  override val blockId: BlockId = {
+  override val blockId: Option[BlockId] = {
     if (inputSplit.value.isInstanceOf[FileSplit]) {
       val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
-      RDDUniqueBlockId(is.getPath().toString()+s" ${index}")
+      Some(RDDUniqueBlockId(is.getPath().toString()+s" ${index}"))
     } else {
-      RDDBlockId(rdd.id, index)
+      Some(RDDBlockId(rdd.id, index))
     }
   }
 

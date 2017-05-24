@@ -76,7 +76,6 @@ class MyRDD(
 
   var that = this;
   override def getPartitions: Array[Partition] = (0 until numPartitions).map(i => new Partition {
-    override def rdd: RDD[_] = that
     override def index: Int = i
   }).toArray
 

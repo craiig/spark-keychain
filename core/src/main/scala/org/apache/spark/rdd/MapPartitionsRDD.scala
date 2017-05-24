@@ -27,23 +27,31 @@ import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 private[spark] class MapPartition(val rdd: RDD[_], val prev: Partition, val funcStr:Option[String])
   extends Partition with Logging {
   override val index: Int = prev.index
-  override val blockId: BlockId = {
+  override val blockId: Option[BlockId] = {
    // we need to avoid problems by operating on non unique child blocks
    // if the funcStr was successfully hashed, use that hash
-   val prevBlockID = prev.blockId
-   if( !funcStr.isEmpty && prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
-     val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
-     RDDUniqueBlockId(str) 
-   } else if( !funcStr.isEmpty && !prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
-     val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
-     logInfo(s"RDD falling back to standard BlockId, prevBlockID parent: ${ prev.rdd.getClass().getName() }"
-       + s" callsite: ${ prev.rdd.getCreationSite }"
-       + s" UniqueBlockId would've been: ${str}")
-     RDDBlockId(rdd.id, index)
+   if( ! prev.blockId.isEmpty ){
+     val prevBlockID = prev.blockId.get
+     if( !funcStr.isEmpty && prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+       val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
+       Some(RDDUniqueBlockId(str))
+     } else if( !funcStr.isEmpty && !prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+       val str = s"map { ${prevBlockID}, ${funcStr.get}, ${index} }"
+       logInfo(s"RDD falling back to standard BlockId, prevBlockID parent: ${ prev.getClass().getName() }"
+         //+ s" callsite: ${ prev.rdd.getCreationSite }"
+         + s" UniqueBlockId would've been: ${str}")
+       Some(RDDBlockId(rdd.id, index))
+     } else {
+       logInfo(s"RDD falling back to standard BlockId because funcStr is empty, prevBlockID parent: ${ prev.getClass().getName() }"
+         )
+         //+ s" callsite: ${ prev.rdd.getCreationSite }")
+       Some(RDDBlockId(rdd.id, index))
+     }
    } else {
-     logInfo(s"RDD falling back to standard BlockId because funcStr is empty, prevBlockID parent: ${ prev.rdd.getClass().getName() }"
-       + s" callsite: ${ prev.rdd.getCreationSite }")
-     RDDBlockId(rdd.id, index)
+     logInfo(s"RDD falling back to standard BlockId because prev.BlockId is empty, prevPartition: ${ prev.getClass().getName() }"
+       )
+       //+ s" callsite: ${ prev.rdd.getCreationSite }")
+     Some(RDDBlockId(rdd.id, index))
    }
   }
 }

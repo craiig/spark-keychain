@@ -365,6 +365,7 @@ private[spark] object ClosureCleaner extends Logging {
       val writeBytes = (output:DataOutputStream, thing:AnyRef, offset:Long, size:Integer) => {
         for(i <- 0 until size){
              output.writeByte( unsafe.getByte(thing.asInstanceOf[Object], offset+i) )
+             logTrace(s"hashInputPrimitives:\t\twriteBytes up to: ${output.size}")
         }
       }
 
@@ -568,6 +569,7 @@ private[spark] object ClosureCleaner extends Logging {
     var hashPrimitivesStart = System.currentTimeMillis
     val bos = new ByteArrayOutputStream()
     val dos = new DataOutputStream(bos)
+    logTrace("Hash input primitives start for: " + func.getClass.getName)
     hashInputPrimitives( func, dos )
     dos.close()
     logTrace(s"Primitive Bytes: ${ bos.toByteArray.mkString(",") } ")

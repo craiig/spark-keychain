@@ -51,10 +51,12 @@ private[spark] class NewHadoopPartition(
   val serializableHadoopSplit = new SerializableWritable(rawSplit)
   override def hashCode(): Int = 41 * (41 + rddId) + index
 
-  override val blockId: BlockId = {
-    blockIdFunc.getOrElse((rdd:RDD[_], is:InputSplit) => {
-      RDDBlockId(rdd.id, index)
-    })( rdd, serializableHadoopSplit.value )
+  override val blockId: Option[BlockId] = {
+    Some(
+      blockIdFunc.getOrElse((rdd:RDD[_], is:InputSplit) => {
+        RDDBlockId(rdd.id, index)
+      })( rdd, serializableHadoopSplit.value )
+    )
   }
 }
 

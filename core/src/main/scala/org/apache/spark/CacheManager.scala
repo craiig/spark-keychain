@@ -40,7 +40,7 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
       context: TaskContext,
       storageLevel: StorageLevel): Iterator[T] = {
 
-    val key = partition.blockId
+    val key = partition.getBlockId(rdd)
     logInfo(s"Looking for partition $key")
     blockManager.get(key) match {
       case Some(blockResult) =>

@@ -31,18 +31,18 @@ class PartitionwiseSampledRDDPartition(val rdd: RDD[_], val prev: Partition, val
   extends Partition with Serializable with Logging {
   override val index: Int = prev.index
 
-  override val blockId: BlockId = {
+  override val blockId: Option[BlockId] = {
     val prevBlockID = prev.blockId
-    if( prevBlockID.isInstanceOf[RDDUniqueBlockId] ){
+    if( !prevBlockID.isEmpty && prevBlockID.get.isInstanceOf[RDDUniqueBlockId] ){
       /* index is encoded by prevBlockId */
-      val str = s"PartitionwiseSampledRDD{ seed:${seed}, prev:${prevBlockID} }"
-      RDDUniqueBlockId(str);
+      val str = s"PartitionwiseSampledRDD{ seed:${seed}, prev:${prevBlockID.get} }"
+      Some(RDDUniqueBlockId(str))
     } else {
       logInfo(s"PartitionwiseSampledRDDPartition falling back to standard block id: "
-        + s"rdd parent: ${prev.rdd.getClass().getName()}"
+        //+ s"rdd parent: ${prev.rdd.getClass().getName()}"
         + s" callsite: ${rdd.getCreationSite}"
         )
-      RDDBlockId(rdd.id, index);
+      Some(RDDBlockId(rdd.id, index))
     }
   }
 }

@@ -27,14 +27,22 @@ trait Partition extends Serializable {
    * Get the partition's index within its parent RDD
    */
   def index: Int
-  @transient def rdd: RDD[_] //kept only on the client
 
   /**
    * Get the partition's blockID given it's parent RDD
    * Important that this is static and calculated at partition
    * allocation time
    */
-  val blockId: BlockId = RDDBlockId(rdd.id, index)
+  // @transient def rdd: RDD[_] //kept only on the client
+  //val blockId: BlockId = RDDBlockId(rdd.id, index)
+  
+  val blockId: Option[BlockId] = None
+  /* called by the cache manager with an associated RDD in case a block ID has
+   * not been set previously, used for backwards compatibility with old RDDs
+   * with non unique partitions */
+  def getBlockId(rdd: RDD[_]): BlockId = {
+    blockId.getOrElse( RDDBlockId(rdd.id, index) )
+  }
 
   // A better default implementation of HashCode
   override def hashCode(): Int = index
