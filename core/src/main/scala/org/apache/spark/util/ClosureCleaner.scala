@@ -561,7 +561,7 @@ private[spark] object ClosureCleaner extends Logging {
     val serializationBytes = hashSerialization(func);
     var serial_hash = MessageDigest.getInstance("SHA-256")
     serial_hash.update(serializationBytes)
-    var serial_hash64 = Base64.encodeBase64String(serial_hash.digest)
+    var serial_hash64 = Base64.encodeBase64URLSafeString(serial_hash.digest)
     logInfo(s"Serialization hash: $serial_hash64")
     */
 
@@ -577,14 +577,14 @@ private[spark] object ClosureCleaner extends Logging {
     var primitive_hash64 = if( bos.toByteArray.length > 0){
       var primitiveHash = MessageDigest.getInstance("SHA-256")
       primitiveHash.update(bos.toByteArray)
-      Base64.encodeBase64String(primitiveHash.digest)
+      Base64.encodeBase64URLSafeString(primitiveHash.digest)
     } else {
       "none"
     }
     logInfo(s"Primitive hash: $primitive_hash64")
 
     //finalize the hash
-    var hashbytesenc = Base64.encodeBase64String(hashbytes)
+    var hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
     logInfo(s"Bytecode hash: $hashbytesenc")
     //Some(hashbytesenc)
 

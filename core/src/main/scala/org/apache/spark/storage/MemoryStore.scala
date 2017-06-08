@@ -143,7 +143,7 @@ private[spark] class MemoryStore(blockManager: BlockManager, memoryManager: Memo
       var hash = MessageDigest.getInstance("SHA-256")
       hash.update(bytes);
       var hashbytes = hash.digest;
-      var hashbytesenc = Base64.encodeBase64String(hashbytes)
+      var hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
       logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size}")
     }
   }

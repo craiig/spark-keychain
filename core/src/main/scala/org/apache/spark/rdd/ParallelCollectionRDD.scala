@@ -112,7 +112,7 @@ private[spark] class ParallelCollectionRDD[T: ClassTag](
       out.close()
       var hasher = MessageDigest.getInstance("SHA-256")
       hasher.update( bos.toByteArray )
-      Base64.encodeBase64String(hasher.digest)
+      Base64.encodeBase64URLSafeString(hasher.digest)
     }
     logInfo(s"calculated data_hash: ${data_hash}")
     val slices = ParallelCollectionRDD.slice(data, numSlices).toArray
