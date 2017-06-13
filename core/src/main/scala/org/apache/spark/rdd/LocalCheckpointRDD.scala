@@ -58,7 +58,7 @@ private[spark] class LocalCheckpointRDD[T: ClassTag](
    */
   override def compute(partition: Partition, context: TaskContext): Iterator[T] = {
     throw new SparkException(
-      s"Checkpoint block ${partition.blockId} not found! Either the executor " +
+      s"Checkpoint block ${partition.getBlockId(this)} not found! Either the executor " +
       s"that originally checkpointed this partition is no longer alive, or the original RDD is " +
       s"unpersisted. If this problem persists, you may consider using `rdd.checkpoint()` " +
       s"instead, which is slower than local checkpointing but more fault-tolerant.")
