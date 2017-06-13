@@ -45,7 +45,7 @@ import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 /**
  * A Spark split class that wraps around a Hadoop InputSplit.
  */
-private[spark] class HadoopPartition(val rdd: RDD[_], override val index: Int, s: InputSplit)
+private[spark] class HadoopPartition(@transient val rdd: RDD[_], override val index: Int, s: InputSplit)
   extends Partition {
 
   val inputSplit = new SerializableWritable[InputSplit](s)

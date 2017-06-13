@@ -22,7 +22,7 @@ import scala.reflect.ClassTag
 import org.apache.spark._
 import org.apache.spark.storage.{BlockId, BlockManager}
 
-private[spark] class BlockRDDPartition(val rdd: RDD[_], val otherBlockId: BlockId, idx: Int) extends Partition {
+private[spark] class BlockRDDPartition(@transient val rdd: RDD[_], val otherBlockId: BlockId, idx: Int) extends Partition {
   val index = idx
   override val blockId = Some(otherBlockId)
 }

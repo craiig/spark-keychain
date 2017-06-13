@@ -41,7 +41,7 @@ import org.apache.spark.util.{SerializableConfiguration, ShutdownHookManager}
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class NewHadoopPartition(
-    val rdd: RDD[_],
+    @transient val rdd: RDD[_],
     val index: Int,
     rawSplit: InputSplit with Writable,
     blockIdFunc: Option[(RDD[_], InputSplit) => BlockId] = None

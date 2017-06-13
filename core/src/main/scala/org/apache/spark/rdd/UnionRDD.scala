@@ -38,7 +38,7 @@ import org.apache.spark.util.Utils
  *                                this partition refers to
  */
 private[spark] class UnionPartition[T: ClassTag](
-    val rdd: RDD[T],
+    @transient val rdd: RDD[T], /* attempt fix for union rdd serialized size: RDDSuite.scala:192 */
     idx: Int,
     @transient private val parentRdd: RDD[T],
     val parentRddIndex: Int,

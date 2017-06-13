@@ -28,7 +28,7 @@ import org.apache.spark.util.Utils
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark]
-class PartitionwiseSampledRDDPartition(val rdd: RDD[_], val prev: Partition, val seed: Long)
+class PartitionwiseSampledRDDPartition(@transient val rdd: RDD[_], val prev: Partition, val seed: Long)
   extends Partition with Serializable with Logging {
   override val index: Int = prev.index
 

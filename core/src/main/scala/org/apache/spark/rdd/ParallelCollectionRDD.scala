@@ -33,7 +33,7 @@ import org.apache.commons.codec.binary.Base64
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class ParallelCollectionPartition[T: ClassTag](
-    var rdd: RDD[_],
+    @transient var rdd: RDD[_],
     @transient var datahash: String,
     var slice: Int,
     var values: Seq[T]

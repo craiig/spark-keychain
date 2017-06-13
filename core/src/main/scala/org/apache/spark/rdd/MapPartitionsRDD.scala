@@ -25,7 +25,7 @@ import org.apache.commons.codec.binary.Base64
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 import org.apache.spark.internal.Logging
 
-private[spark] class MapPartition(val rdd: RDD[_], val prev: Partition, val funcStr:Option[String])
+private[spark] class MapPartition(@transient val rdd: RDD[_], val prev: Partition, val funcStr:Option[String])
   extends Partition with Logging {
   override val index: Int = prev.index
   override val blockId: Option[BlockId] = {

@@ -28,7 +28,7 @@ import org.apache.spark.util.Utils
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 
 private[spark] class ZippedPartitionsPartition(
-    val rdd: RDD[_],
+    @transient val rdd: RDD[_],
     idx: Int,
     @transient private val rdds: Seq[RDD[_]],
     @transient val preferredLocations: Seq[String])
