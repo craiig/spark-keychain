@@ -256,6 +256,7 @@ abstract class RDD[T: ClassTag](
           require(partition.index == index,
             s"partitions($index).partition == ${partition.index}, but it should equal $index")
         }
+        sc.assertNotStopped() /* spark context cannot be stopped in order to register rdds */
         partitions.foreach( (p) => {
           sc.env.blockManager.master.registerRDDusingBlockId( p.getBlockId(this), this.id );
         })

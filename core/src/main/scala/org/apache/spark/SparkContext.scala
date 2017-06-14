@@ -2096,6 +2096,9 @@ class SparkContext(config: SparkConf) extends Logging {
       rdd: RDD[T],
       func: (TaskContext, Iterator[T]) => U,
       partitions: Seq[Int]): Array[U] = {
+    if (stopped.get()) {
+      throw new IllegalStateException("SparkContext has been shutdown")
+    }
     val results = new Array[U](partitions.size)
     runJob[T, U](rdd, func, partitions, (index, res) => results(index) = res)
     results
@@ -2115,6 +2118,9 @@ class SparkContext(config: SparkConf) extends Logging {
       rdd: RDD[T],
       func: Iterator[T] => U,
       partitions: Seq[Int]): Array[U] = {
+    if (stopped.get()) {
+      throw new IllegalStateException("SparkContext has been shutdown")
+    }
     val cleanedFunc = clean(func)
     runJob(rdd, (ctx: TaskContext, it: Iterator[T]) => cleanedFunc(it), partitions)
   }
@@ -2129,6 +2135,9 @@ class SparkContext(config: SparkConf) extends Logging {
    * a result from one partition)
    */
   def runJob[T, U: ClassTag](rdd: RDD[T], func: (TaskContext, Iterator[T]) => U): Array[U] = {
+    if (stopped.get()) {
+      throw new IllegalStateException("SparkContext has been shutdown")
+    }
     runJob(rdd, func, 0 until rdd.partitions.length)
   }
 
@@ -2141,6 +2150,9 @@ class SparkContext(config: SparkConf) extends Logging {
    * a result from one partition)
    */
   def runJob[T, U: ClassTag](rdd: RDD[T], func: Iterator[T] => U): Array[U] = {
+    if (stopped.get()) {
+      throw new IllegalStateException("SparkContext has been shutdown")
+    }
     runJob(rdd, func, 0 until rdd.partitions.length)
   }
 
@@ -2157,6 +2169,9 @@ class SparkContext(config: SparkConf) extends Logging {
     processPartition: (TaskContext, Iterator[T]) => U,
     resultHandler: (Int, U) => Unit)
   {
+    if (stopped.get()) {
+      throw new IllegalStateException("SparkContext has been shutdown")
+    }
     runJob[T, U](rdd, processPartition, 0 until rdd.partitions.length, resultHandler)
   }
 
@@ -2172,6 +2187,9 @@ class SparkContext(config: SparkConf) extends Logging {
       processPartition: Iterator[T] => U,
       resultHandler: (Int, U) => Unit)
   {
+    if (stopped.get()) {
+      throw new IllegalStateException("SparkContext has been shutdown")
+    }
     val processFunc = (context: TaskContext, iter: Iterator[T]) => processPartition(iter)
     runJob[T, U](rdd, processFunc, 0 until rdd.partitions.length, resultHandler)
   }
