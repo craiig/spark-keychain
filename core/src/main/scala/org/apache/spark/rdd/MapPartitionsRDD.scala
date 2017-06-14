@@ -70,7 +70,7 @@ private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
   val f_outerHash:Option[String] = SparkContext.getOrCreate().hash(f)
 
   //only calculate a function hash if we were passed an innerhash
-  val f_hash:Option[String] = if(!lambdaHash.isEmpty){
+  val f_hash:Option[String] = if(!lambdaHash.isEmpty && !f_outerHash.isEmpty){
     Some(s"inner_${lambdaHash.get}_outer_${f_outerHash.get}")
   } else {
     None

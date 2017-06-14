@@ -19,6 +19,7 @@ package org.apache.spark.util
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectOutputStream, DataOutputStream}
 import java.io.{ObjectStreamClass}
+import java.io.{IOException}
 import sun.misc.Unsafe
 import java.lang.reflect.Modifier
 import java.lang.reflect.{Array => ReflectArray};
@@ -499,6 +500,20 @@ private[spark] object ClosureCleaner extends Logging {
    */
   var hashCache: Map[String, Array[Byte]] = Map.empty
   def hash(func: AnyRef): Option[String] = {
+    try {
+      hash_internal(func)
+    } catch {
+      /* IOException happens when a class we need to hash can't be found.  We
+       * need to access the class but can't, so we can't produce a valid hash,
+       * so just return None.  Encountered when SparkContext has been stopped
+       * in testing */
+      case e: IOException => {
+        logInfo(s"HLS Hash failed: ${e}")
+        return None
+      }
+    }
+  }
+  def hash_internal(func: AnyRef): Option[String] = {
     var hashStart = System.currentTimeMillis
 
     if (!isClosure(func.getClass)) {
