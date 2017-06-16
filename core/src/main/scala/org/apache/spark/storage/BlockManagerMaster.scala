@@ -87,8 +87,8 @@ class BlockManagerMaster(
   def getRDDsUsingBlockId( blockId:BlockId ): Set[Int] = {
     driverEndpoint.askSync[Set[Int]]( GetRDDsUsingBlockId(blockId) )
   }
-  def getAllRDDsUsingBlockIds(): Seq[(BlockId, Set[Int])] = {
-    driverEndpoint.askSync[Seq[(BlockId, Set[Int])]]( GetAllRDDsUsingBlockIds() )
+  def getAllRDDsUsingBlockIds(): Seq[(BlockId, scala.collection.mutable.Set[Int])] = {
+    driverEndpoint.askSync[Seq[(BlockId, scala.collection.mutable.Set[Int])]]( GetAllRDDsUsingBlockIds() )
   }
 
   def updateBlockInfo(

@@ -1772,7 +1772,7 @@ class SparkContext(config: SparkConf) extends Logging {
   }
 
   def printBlockIDs: Unit = {
-    val blockids:Seq[(BlockId, Set[Int])]
+    val blockids:Seq[(BlockId, scala.collection.mutable.Set[Int])]
       = env.blockManager.master.getAllRDDsUsingBlockIds
     for( (blockid, rdds) <- blockids ){
       //println(s"BlockId: $blockid")

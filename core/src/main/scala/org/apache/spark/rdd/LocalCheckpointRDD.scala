@@ -20,7 +20,7 @@ package org.apache.spark.rdd
 import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, SparkContext, SparkException, TaskContext}
-import org.apache.spark.storage.RDDBlockId
+import org.apache.spark.storage.{BlockId, RDDBlockId}
 
 /**
  * A dummy CheckpointRDD that exists to provide informative error messages during failures.
@@ -34,18 +34,21 @@ import org.apache.spark.storage.RDDBlockId
  * @param rddId the ID of the checkpointed RDD
  * @param numPartitions the number of partitions in the checkpointed RDD
  */
-private[spark] class LocalCheckpointRDD[T: ClassTag](
-    sc: SparkContext,
-    rddId: Int,
-    numPartitions: Int)
-  extends CheckpointRDD[T](sc) {
+private[spark] class LocalCheckpointRDD[T: ClassTag](@transient val rdd: RDD[_])
+  extends CheckpointRDD[T](rdd.context) {
 
-  def this(rdd: RDD[T]) {
-    this(rdd.context, rdd.id, rdd.partitions.length)
+  val rddId: Int = rdd.id
+  val numPartitions: Int = rdd.partitions.length
+  val _partitions: Array[Partition] = {
+    rdd.partitions.zipWithIndex map { case (p:Partition,i:Int) => new CheckpointRDDPartition( this, i, Some(p.getBlockId(rdd)) ) }
   }
 
   protected override def getPartitions: Array[Partition] = {
-    (0 until numPartitions).toArray.map { i => new CheckpointRDDPartition(this, i) }
+    /* to use HLS, we need to re-use the existing blockIds from the parents
+     * partitions, these blocks should already be registered as in use by the
+     * rdd so we don't need to register them.
+     */
+    _partitions
   }
 
   /**

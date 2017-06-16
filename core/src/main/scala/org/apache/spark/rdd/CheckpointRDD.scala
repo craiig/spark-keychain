@@ -20,11 +20,12 @@ package org.apache.spark.rdd
 import scala.reflect.ClassTag
 
 import org.apache.spark.{Partition, SparkContext, TaskContext}
+import org.apache.spark.storage.BlockId
 
 /**
  * An RDD partition used to recover checkpointed data.
  */
-private[spark] class CheckpointRDDPartition(val rdd: RDD[_], val index: Int) extends Partition
+private[spark] class CheckpointRDDPartition(val rdd: RDD[_], val index: Int, override val blockId: Option[BlockId]=None) extends Partition
 
 /**
  * An RDD that recovers checkpointed data from storage.

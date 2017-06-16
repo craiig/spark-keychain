@@ -164,13 +164,14 @@ class LocalCheckpointSuite extends SparkFunSuite with LocalSparkContext {
 
     // After an action, the blocks should be found somewhere in the cache
     rdd.collect()
-    partitionIndices.foreach { i =>
-      assert(bmm.contains(RDDBlockId(rdd.id, i)))
+    rdd.partitions.foreach { p =>
+      val blockId = p.getBlockId(rdd)
+      assert(bmm.contains(blockId))
     }
 
     // Remove one of the blocks to simulate executor failure
     // Collecting the RDD should now fail with an informative exception
-    val blockId = RDDBlockId(rdd.id, numPartitions - 1)
+    val blockId = rdd.partitions.last.getBlockId(rdd)
     bmm.removeBlock(blockId)
     // Wait until the block has been removed successfully.
     eventually(timeout(1 seconds), interval(100 milliseconds)) {
@@ -322,8 +323,8 @@ class LocalCheckpointSuite extends SparkFunSuite with LocalSparkContext {
 
     // After an action, the blocks should be found in the cache with the expected level
     rdd.collect()
-    partitionIndices.foreach { i =>
-      val blockId = RDDBlockId(rdd.id, i)
+    rdd.partitions.foreach { p =>
+      val blockId = p.getBlockId(rdd)
       val status = bmm.getBlockStatus(blockId)
       assert(status.nonEmpty)
       assert(status.values.head.storageLevel === targetStorageLevel)
