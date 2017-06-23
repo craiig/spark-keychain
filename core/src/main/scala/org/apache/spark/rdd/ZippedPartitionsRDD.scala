@@ -39,7 +39,7 @@ private[spark] class ZippedPartitionsPartition(
   @transient var partitionBlockIds = rdds.map(rdd => rdd.partitions(idx).getBlockId(rdd))
   def partitions: Seq[Partition] = partitionValues
 
-  override val blockId: Option[BlockId] = {
+  blockId = {
     //if all parent rdds are unique rdds then we can be too
     val rddIsUnique = partitionBlockIds.map( (p) => p match {
       case RDDUniqueBlockId(_) => true

@@ -49,7 +49,7 @@ class WriteAheadLogBackedBlockRDDPartition(
     val isBlockIdValid: Boolean,
     val walRecordHandle: WriteAheadLogRecordHandle
   ) extends Partition {
-    override val blockId = Some(givenBlockId)
+    blockId = Some(givenBlockId)
 }
 
 

@@ -56,7 +56,7 @@ private[spark] class NewHadoopPartition(
 
   override def equals(other: Any): Boolean = super.equals(other)
 
-  override val blockId: Option[BlockId] = {
+  blockId = {
     Some(
       blockIdFunc.getOrElse((rdd:RDD[_], is:InputSplit) => {
         RDDBlockId(rdd.id, index)

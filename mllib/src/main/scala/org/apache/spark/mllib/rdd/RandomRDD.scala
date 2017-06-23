@@ -40,7 +40,7 @@ private[mllib] class RandomRDDPartition[T](
    * we don't even need to include the partition index */
   def uniquename:String = s"randomRDD_size=${size}_gen=${generator.getClass.getName}_genparams={${generator.getHLS}}_seed=${seed}_${index}"
 
-  override val blockId: Option[BlockId] = {
+  blockId = {
     Some(RDDUniqueBlockId(uniquename))
   }
 }

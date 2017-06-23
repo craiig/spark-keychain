@@ -54,7 +54,7 @@ private[spark] class HadoopPartition(@transient val rdd: RDD[_], override val in
 
   override def equals(other: Any): Boolean = super.equals(other)
 
-  override val blockId: Option[BlockId] = {
+  blockId = {
     if (inputSplit.value.isInstanceOf[FileSplit]) {
       val is: FileSplit = inputSplit.value.asInstanceOf[FileSplit]
       Some(RDDUniqueBlockId(is.getPath().toString()+s" ${index}"))

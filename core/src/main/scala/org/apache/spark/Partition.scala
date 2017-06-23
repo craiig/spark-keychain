@@ -36,7 +36,7 @@ trait Partition extends Serializable {
   // @transient def rdd: RDD[_] //kept only on the client
   //val blockId: BlockId = RDDBlockId(rdd.id, index)
   
-  val blockId: Option[BlockId] = None
+  var blockId: Option[BlockId] = None
   /* called by the cache manager with an associated RDD in case a block ID has
    * not been set previously, used for backwards compatibility with old RDDs
    * with non unique partitions */

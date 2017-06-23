@@ -29,7 +29,7 @@ private[spark] class ShuffledRDDPartition(@transient val rdd: RDD[_], val idx: I
   val part: Partitioner, val prev: RDD[_]) extends Partition with Logging {
   override val index: Int = idx
   override def hashCode(): Int = idx
-  override val blockId: Option[BlockId] = {
+  blockId = {
     //val prevBlockID = prev.blockId
     
     if( prev.partitions.isEmpty ){

@@ -25,7 +25,7 @@ import org.apache.spark.storage.BlockId
 /**
  * An RDD partition used to recover checkpointed data.
  */
-private[spark] class CheckpointRDDPartition(val rdd: RDD[_], val index: Int, override val blockId: Option[BlockId]=None) extends Partition
+private[spark] class CheckpointRDDPartition(val rdd: RDD[_], val index: Int, blockId: Option[BlockId]=None) extends Partition
 
 /**
  * An RDD that recovers checkpointed data from storage.

@@ -32,7 +32,7 @@ class PartitionwiseSampledRDDPartition(@transient val rdd: RDD[_], val prev: Par
   extends Partition with Serializable with Logging {
   override val index: Int = prev.index
 
-  override val blockId: Option[BlockId] = {
+  blockId = {
     val prevBlockID = prev.blockId
     if( !prevBlockID.isEmpty && prevBlockID.get.isInstanceOf[RDDUniqueBlockId] ){
       /* index is encoded by prevBlockId */

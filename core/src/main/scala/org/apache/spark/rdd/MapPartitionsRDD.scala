@@ -28,7 +28,7 @@ import org.apache.spark.internal.Logging
 private[spark] class MapPartition(@transient val rdd: RDD[_], val prev: Partition, val funcStr:Option[String])
   extends Partition with Logging {
   override val index: Int = prev.index
-  override val blockId: Option[BlockId] = {
+  blockId= {
    // we need to avoid problems by operating on non unique child blocks
    // if the funcStr was successfully hashed, use that hash
    if( ! prev.blockId.isEmpty ){

@@ -24,7 +24,7 @@ import org.apache.spark.storage.{BlockId, BlockManager}
 
 private[spark] class BlockRDDPartition(@transient val rdd: RDD[_], val otherBlockId: BlockId, idx: Int) extends Partition {
   val index = idx
-  override val blockId = Some(otherBlockId)
+  blockId = Some(otherBlockId)
 }
 
 private[spark]
