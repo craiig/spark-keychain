@@ -25,7 +25,7 @@ import java.lang.reflect.Modifier
 import java.lang.reflect.{Array => ReflectArray};
 import java.nio.ByteBuffer;
 
-import scala.collection.mutable.{Map, Set, SortedSet, Queue, Stack}
+import scala.collection.mutable.{Map, Set, SortedSet, Queue, Stack, ListBuffer, HashMap}
 import scala.language.existentials
 import scala.collection.JavaConverters._
 
@@ -42,6 +42,10 @@ import org.apache.commons.codec.binary.Base64
 
 import org.apache.spark.{SparkEnv, SparkException}
 import org.apache.spark.internal.Logging
+
+import org.json4s._
+import org.json4s.jackson.Serialization
+import org.json4s.jackson.Serialization.{write => WriteJson}
 
 /**
  * A cleaner that renders closures serializable if they can be done so safely.
@@ -128,12 +132,15 @@ private[spark] object ClosureCleaner extends Logging {
   private def getFunctionsCalled(obj: AnyRef): Set[Class2Func] = {
     var cls = obj.getClass
 
+    /* read first set */
     val seen = SortedSet[Class2Func]()
     getClassReader(obj.getClass).accept(new CalledFunctionsFinder(seen), 0)
 
+    /* add all called functions to visit stack */
     var stack = SortedSet[Class2Func]()
     getClassReader(obj.getClass).accept(new CalledFunctionsFinder(stack), 0)
 
+    /* visit all other functions */
     while(!stack.isEmpty){
       val tup = stack.head
       stack = stack.tail
@@ -154,17 +161,23 @@ private[spark] object ClosureCleaner extends Logging {
     seen
   }
 
-  /* hash a class, optionally only the given functions,
-   * hashing the function using hashObj
-   * - if anonymizeClass is true, the hashing will ignore the 
-   * name of the function itself, which is useful for hashing
-   * closures from the scala REPL
+  /* hash a given classes bytecode, optionally only the given functions,
+   * will anonymize certain names to avoid false negatives due to:
+   *  REPL line numbers
+   *  names of called functions (redundant when the bytecode is included instead)
+   *  outer classes of called functions
+   * @param obj the object to hash (class or lambda)
+   * @param hashObj the digest to add bytecode to
+   * @param hashTrace map object that is used to store debug information about the hash procedure
+   * @param funcList list of functions to hash of the class (if empty, all functions will be hashed)
    * */
+  type HashTraceMap = HashMap[String,Any]
   private def hashClass(obj: AnyRef,
     hashObj: MessageDigest,
-    anonymizeClass:Boolean = false,
+    hashTrace: HashTraceMap,
     funcList: Set[(String,String)] = Set()
     ): Unit  = {
+     val anonymizeClass = true; //always anonymize the class
 
      /* build classnode */
      val cn = new ClassNode()
@@ -176,24 +189,26 @@ private[spark] object ClosureCleaner extends Logging {
      }
      getClassReader(objcls).accept(cn, 0)
 
-     logDebug(s"Hashing Class")
-     logDebug(s"name: ${cn.name}")
-     logDebug(s"outerClass: ${cn.outerClass}")
-     logDebug(s"outerMethod: ${cn.outerMethod}")
-     logDebug(s"outerMethodDesc: ${cn.outerMethodDesc}")
-     logDebug(s"signature: ${cn.signature}")
-     logDebug(s"superName: ${cn.superName}")
+     /* build debug trace */
+     var localHash = MessageDigest.getInstance(preferredHashType)
+     hashTrace += (
+       ("name" -> cn.name), 
+       ("outerClass" -> cn.outerClass),
+       ("outerMethod" -> cn.outerMethod),
+       ("outerMethodDesc" -> cn.outerMethodDesc),
+       ("signature" -> cn.signature),
+       ("superName" -> cn.superName)
+     )
      
      for( f <- objcls.getDeclaredFields ){
        if (f.getName == "serialVersionUID"){
          try {
-           logDebug(s"+ serialVersionUID: ${f.getLong(null)}")
+           hashTrace += ("serialVersionUID" -> f.getLong(null).toString)
          } catch {
-           case e: Exception => logDebug("+ serialVersionUID: exception")
+           case e: Exception => hashTrace += ("serialVersionUID" -> null)
          }
        }
      }
-
 
      /* read class using a visitor we can override
       * make sure to rewrite any non-identifying symbols that could cause
@@ -293,6 +308,7 @@ private[spark] object ClosureCleaner extends Logging {
 
          bytecode_string.append(methodHeader)
          hashObj.update(methodHeader.getBytes)
+         localHash.update(methodHeader.getBytes)
 
          m.accept(tm) //visit method
 
@@ -301,21 +317,38 @@ private[spark] object ClosureCleaner extends Logging {
            var s = o.toString()
            bytecode_string.append(s)
            hashObj.update(s.getBytes)
+           localHash.update(methodHeader.getBytes)
          }
          p.getText.clear
        }
      }
 
-    logTrace(s"HashClass Bytecode:\n$bytecode_string")
+    hashTrace += ("bytecode" -> bytecode_string.toString)
+    hashTrace += ("localHash" -> Base64.encodeBase64URLSafeString(localHash.digest))
+
+    //recurse into callees of the given function
   }
 
-  /* a different way of approaching serialization:
+  /* Hash all referenced fields of an object, ignoring everything except bytes
+   * of primitives, making Array[Int,Int] = (Int,Int). Alone this might
+   * introduce ambiguity but when combined with the bytecode hash there is no
+   * ambiguity.
+   *
    * use java reflection and sun.misc.unsafe to introspect the memory directly
    * copy the serialization code and walk the objects ourselves
    * this will only serialize non-transitive, non-static primitive values
+   *
+   * this routine assumes the object has been passed through the clean method
+   * so there are no irrelevant fields to hash that remain on the object
+   *
+   * @param func the function to walk to hash the primitives
+   * @param dos the stream where the bytes will be written to
+   * @param visited a set of previously visited objects, to avoid duplicating work (used for recursion)
+   * @param clz class 
    */
   def hashInputPrimitives(func: AnyRef,
     dos: DataOutputStream,
+    hashTrace:HashTraceMap,
     visited:Set[Object] = Set[Object](),
     clz:Class[_] = null
   ):Unit = {
@@ -332,6 +365,7 @@ private[spark] object ClosureCleaner extends Logging {
     }
     visited += func;
 
+    /* queue of objects to visit */
     val toVisit = Queue[AnyRef]() //Queue is ordered?
 
     var cl = clz;
@@ -339,6 +373,14 @@ private[spark] object ClosureCleaner extends Logging {
       cl = func.getClass()
     }
     logTrace(s"hashInputPrimitives: class: ${cl.getName}")
+    /* trace enough so we can attribute differences in hashing to a FIELD */
+    //var hashTrace:HashTraceMap = Map(
+    hashTrace += (
+      "class"->cl.getName, 
+      "fields"->ListBuffer[HashTraceMap](),
+      "children"->ListBuffer[HashTraceMap]()
+    )
+
     for( f <- cl.getDeclaredFields ){
       f.setAccessible(true)
       val transient = Modifier.isTransient(f.getModifiers)
@@ -349,18 +391,27 @@ private[spark] object ClosureCleaner extends Logging {
       logTrace(s"hashInputPrimitives:\tfield ${f.getName} type: ${fldtype.getName}")
       logTrace(s"hashInputPrimitives:\t\tstatic: ${static} primitive: ${primitive} type: ${fldtype.getName} transient: ${transient}")
 
+      var fieldTrace:HashTraceMap = HashMap( "name"->f.getName, "type"->fldtype.getName,
+        "static"->static, "primitive"->primitive, "transient"->transient )
+
+      val fieldBytesTrace = ListBuffer[String]()
+
       val writeBytes = (output:DataOutputStream, thing:AnyRef, offset:Long, size:Integer) => {
         for(i <- 0 until size){
-             output.writeByte( unsafe.getByte(thing.asInstanceOf[Object], offset+i) )
+             val b = unsafe.getByte(thing.asInstanceOf[Object], offset+i)
+             output.writeByte( b )
+             fieldBytesTrace += b.toString
              logTrace(s"hashInputPrimitives:\t\twriteBytes up to: ${output.size}")
         }
       }
 
       if( !( static || transient ) ){
+        /* only read fields that are not static and not transient */
         val offset = unsafe.objectFieldOffset( f )
         //if primitive, grab value
         if(primitive && !fldtype.isArray()){
           logTrace(s"hashInputPrimitives:\t\tadding to hash (primitive)")
+          fieldTrace += ("hashedAs"->"primitive")
           if( fldtype == classOf[Byte] ){
             //dos.writeByte( unsafe.getByte(func.asInstanceOf[Object], offset) )
             writeBytes(dos, func, offset, 1)
@@ -398,11 +449,14 @@ private[spark] object ClosureCleaner extends Logging {
             val indexScale = unsafe.arrayIndexScale( fldtype );
             logTrace(s"hashInputPrimitives:\tfield is array, value:${Value.mkString(",")} length: ${length} baseOffset: ${baseOffset} indexScale: ${indexScale}");
             logTrace(s"hashInputPrimitives:\t\tadding to hash (array)")
+            fieldTrace += ("hashedAs"->"array", "length"->length, "baseOffset"->baseOffset,
+              "indexScale"->indexScale, "value"->Value.mkString)
 
             // if this is an array of objects (not primitives),
             // make sure we visit each one
             if(Value.isInstanceOf[Array[Object]]){
               logTrace(s"hashInputPrimitives:\t\twriting objects")
+              fieldTrace += ("elementsHashedAs"->"objects")
               for(p <- Value.asInstanceOf[Array[Object]]){
                 if(p != null){
                   toVisit += p
@@ -410,6 +464,7 @@ private[spark] object ClosureCleaner extends Logging {
               }
             } else {
               logTrace(s"hashInputPrimitives:\t\twriting raw bytes")
+              fieldTrace += ("elementsHashedAs"->"bytes")
               //primitive arrays get visited directly??
               //read the bytes of the array so that we don't have to infer type
               // this has a problem in that reading bytes gives different byte ordering
@@ -417,7 +472,9 @@ private[spark] object ClosureCleaner extends Logging {
               //val byteArray:Array[Byte] = new Array[Byte](indexScale*length);
               for(i <- 0 to (indexScale*length-1) ){
                 //byteArray(i) = unsafe.getByte( Value, baseOffset + i );
-                dos.writeByte( unsafe.getByte( Value, baseOffset + i ) )
+                val b = unsafe.getByte( Value, baseOffset + i )
+                dos.writeByte( b )
+                fieldBytesTrace += b.toString
               }
             }
           }
@@ -428,32 +485,45 @@ private[spark] object ClosureCleaner extends Logging {
           val p = f.get(func)
           if(p != null){
             logTrace(s"hashInputPrimitives:\t\tadding to visit list")
+            fieldTrace += ("hashedAs"->"visited")
             toVisit += p
-            logTrace(s"visit list: ${toVisit.mkString(",")}")
-            //hashInputPrimitives(p, dos, visited)
-            //logTrace(s"hashInputPrimitives: class: ${cl.getName}")
           }
         }
+      } else {
+        //trace non visited fields
+        fieldTrace += ("hashedAs" -> "skipped")
       }
+
+      //add field trace to the hash trace
+      fieldTrace += ("hashed_bytes" -> fieldBytesTrace.mkString(","))
+      hashTrace("fields").asInstanceOf[ListBuffer[HashTraceMap]] += fieldTrace
     }
 
+    logTrace(s"visit list: ${toVisit.mkString(",")}")
     for( p <- toVisit ){
       logTrace(s"visiting ${p}")
-      hashInputPrimitives(p, dos, visited)
+      val childTrace = new HashTraceMap
+      hashInputPrimitives(p, dos, childTrace, visited)
+      hashTrace("children").asInstanceOf[ListBuffer[HashTraceMap]] += childTrace
     }
 
     //TODO support externalizable objects?
 
     //follow the parent class desc
     if( cl.getSuperclass() != null ){
-      hashInputPrimitives(func, dos, visited, cl.getSuperclass() )
+      val childTrace = new HashTraceMap
+      hashInputPrimitives(func, dos, childTrace, visited, cl.getSuperclass() )
+      hashTrace += ("superclass"->childTrace)
     }
   }
 
   /* serialize the entire function to bytes, and fix/blank out
    * any fields that we don't need, then return the bytes for hashing
    * we just serialize the top-level class which should capture everything
-   * required */
+   * required 
+   *
+   * this function is very deprecated
+   * */
   def hashSerialization(func:AnyRef): Array[Byte] = {
     var serialize_func = (f:AnyRef) => {
       val bos = new ByteArrayOutputStream()
@@ -495,9 +565,10 @@ private[spark] object ClosureCleaner extends Logging {
    * This hashes only the functional pieces of the closure
    *  - function signature
    *  - instructions
-   * so that it's functionality can be summarized as a hash, used for comparison between different
-   * spark contexts that may be in use
+   * so that it's functionality can be summarized as a hash, used for
+   * comparison between different spark contexts that may be in use
    */
+  val preferredHashType = "SHA-256"
   var hashCache: Map[String, Array[Byte]] = Map.empty
   def hash(func: AnyRef): Option[String] = {
     try {
@@ -526,28 +597,42 @@ private[spark] object ClosureCleaner extends Logging {
     logDebug(s"+++ Hashing closure $func (${func.getClass.getName}) +++")
 
     /* first check to see if we've already hash the given ref */
-    var hashbytes:Array[Byte] = hashCache get func.getClass.getName match {
+    /* TODO potentially implement cache that stores callees seperately */
+    var bytecodeHashTraces = ListBuffer[HashTraceMap]()
+
+    var bytecodeHashbytes:Array[Byte] = hashCache get func.getClass.getName match {
       case Some(result) => {
         logInfo("Hash Cache hit for: " + func.getClass.getName)
+        bytecodeHashTraces += HashMap(
+          "hashCacheHit"->true, 
+          "name"-> func.getClass.getName, 
+          "localHash" -> Base64.encodeBase64URLSafeString(result)
+        )
         result
       }
       case None => {
           logInfo("Hash Cache miss for: " + func.getClass.getName)
+
           var classesToVisit = getFunctionsCalled(func)
           logDebug(s"+++ All classes to visit: $classesToVisit")
-          /* hash the given function */
-          var hash = MessageDigest.getInstance("SHA-256")
 
-          hashClass(func, hash, true)  //true = anonymize function
+          /* hash the given function */
+          var hash = MessageDigest.getInstance(preferredHashType)
+          var bytecodeHashTrace = new HashTraceMap
+          hashClass(func, hash, bytecodeHashTrace) 
+          bytecodeHashTraces += bytecodeHashTrace
 
           /* hash the bytecode of all functions that this function calls */
-          /* todo rewrite this so we only call it once per class */
+          /* TODO rewrite this so we only call it once per class */
           for( cls <- classesToVisit ){
             var clzname = cls._1.replace('/', '.')
             var obj = Class.forName( clzname,
             false, Thread.currentThread.getContextClassLoader)
             logDebug(s"+++ hashing $clzname functions: ${ (cls._2, cls._3) }")
-            hashClass(obj, hash, true, Set((cls._2, cls._3)) )
+
+            var bytecodeHashTrace:HashTraceMap = new HashTraceMap
+            hashClass(obj, hash, bytecodeHashTrace, Set((cls._2, cls._3)) )
+            bytecodeHashTraces += bytecodeHashTrace
           }
           val digest = hash.digest
           hashCache(func.getClass.getName) = digest
@@ -571,7 +656,8 @@ private[spark] object ClosureCleaner extends Logging {
     val bos = new ByteArrayOutputStream()
     val dos = new DataOutputStream(bos)
     logTrace("Hash input primitives start for: " + func.getClass.getName)
-    hashInputPrimitives( func, dos )
+    val primitiveHashTrace = new HashTraceMap
+    hashInputPrimitives( func, dos, primitiveHashTrace )
     dos.close()
     logTrace(s"Primitive Bytes: ${ bos.toByteArray.mkString(",") } ")
 
@@ -585,7 +671,7 @@ private[spark] object ClosureCleaner extends Logging {
     logInfo(s"Primitive hash: $primitive_hash64")
 
     //finalize the hash
-    var hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
+    var hashbytesenc = Base64.encodeBase64URLSafeString(bytecodeHashbytes)
     logInfo(s"Bytecode hash: $hashbytesenc")
     //Some(hashbytesenc)
 
@@ -597,6 +683,26 @@ private[spark] object ClosureCleaner extends Logging {
     logInfo(s"Hashing took: ${hashStop - hashStart} ms closure:${func.getClass.getName}")
     logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ms closure:${func.getClass.getName}")
     logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ms closure:${func.getClass.getName}")
+
+    var overallHashTrace = Map(
+      "closureName" -> func.getClass.getName,
+      "bytecode"-> Map(
+        "trace"->bytecodeHashTraces,
+        "hash"->hashbytesenc,
+        "took_ms"->(hashBytecodeStop - hashStart)
+      ),
+      "primitives"-> Map(
+        "trace"->primitiveHashTrace,
+        "hash"->primitive_hash64,
+        "hashed_bytes"->bos.toByteArray.mkString(","),
+        "took_ms"->(hashStop - hashPrimitivesStart)
+      ),
+      "mergedHash"->merged,
+      "took_ms"->(hashStop - hashStart)
+    )
+
+    implicit val jsonformats = Serialization.formats(NoTypeHints)
+    logInfo(s"Hashing trace: ${WriteJson(overallHashTrace)}")
 
     Some(merged)
   }
