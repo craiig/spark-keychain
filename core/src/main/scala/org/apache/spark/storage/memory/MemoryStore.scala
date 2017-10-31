@@ -45,18 +45,24 @@ private sealed trait MemoryEntry[T] {
   def size: Long
   def memoryMode: MemoryMode
   def classTag: ClassTag[T]
+  var hash: String
+  var hash_took: Long
 }
 private case class DeserializedMemoryEntry[T](
     value: Array[T],
     size: Long,
     classTag: ClassTag[T]) extends MemoryEntry[T] {
   val memoryMode: MemoryMode = MemoryMode.ON_HEAP
+  var hash = ""
+  var hash_took = 0L
 }
 private case class SerializedMemoryEntry[T](
     buffer: ChunkedByteBuffer,
     memoryMode: MemoryMode,
     classTag: ClassTag[T]) extends MemoryEntry[T] {
   def size: Long = buffer.size
+  var hash = ""
+  var hash_took = 0L
 }
 
 private[storage] trait BlockEvictionHandler {
@@ -138,8 +144,21 @@ private[spark] class MemoryStore(
    *  duplication. Note that serialized and deserialized versions of
    *  the same data may not hash to the same result.
    */
+  def getHash(blockId: BlockId): String = {
+    val ret = entries.synchronized {
+      entries.get(blockId).hash
+    }
+    ret
+  }
+  def getHashTook(blockId: BlockId): Long = {
+    val ret = entries.synchronized {
+      entries.get(blockId).hash_took
+    }
+    ret
+  }
   def hashEntry( blockId: BlockId, entry: SerializedMemoryEntry[_], classTag: ClassTag[_]){
     if(conf.getBoolean("spark.storage.hashCachedBlocks", false)){
+      var hashStart = System.nanoTime
       val hash = MessageDigest.getInstance("SHA-256")
       val chunks = entry.buffer.getChunks
       var size = 0;
@@ -149,27 +168,43 @@ private[spark] class MemoryStore(
       })
       val hashbytes = hash.digest;
       val hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
-      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size} serialized: 1")
+      var hashStop = System.nanoTime
+
+      entries.synchronized {
+        entries.get(blockId).hash = hashbytesenc
+        entries.get(blockId).hash_took = (hashStop - hashStart)
+      }
+
+      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size} serialized: 1 took: ${hashStop - hashStart} ns")
     }
   }
 
   def hashEntry( blockId: BlockId, entry: DeserializedMemoryEntry[_], classTag: ClassTag[_]){
     if(conf.getBoolean("spark.storage.hashCachedBlocks", false)){
       //need to serialize and then pass to the hashing algorithm
+      var hashStart = System.nanoTime
       val ser: SerializerInstance = {
         val autoPick = !blockId.isInstanceOf[StreamBlockId]
         serializerManager.getSerializer(classTag, autoPick).newInstance()
       }
       val hash = MessageDigest.getInstance("SHA-256")
       var size = 0;
+      /* serialized case seems to serialize each element so we mimic here */
       entry.value.map( (value) => {
         val b = ser.serialize(value)
-        size + b.remaining
+        size += b.remaining
         hash.update(b)
       })
       val hashbytes = hash.digest;
       val hashbytesenc = Base64.encodeBase64URLSafeString(hashbytes)
-      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size} serialized: 0")
+      var hashStop = System.nanoTime
+
+      entries.synchronized {
+        entries.get(blockId).hash = hashbytesenc
+        entries.get(blockId).hash_took = (hashStop - hashStart)
+      }
+
+      logInfo(s"Cached block ${blockId} hash: ${hashbytesenc} size: ${size} serialized: 0 took: ${hashStop - hashStart} ns")
     }
   }
 
@@ -192,10 +227,10 @@ private[spark] class MemoryStore(
       val bytes = _bytes()
       assert(bytes.size == size)
       val entry = new SerializedMemoryEntry[T](bytes, memoryMode, implicitly[ClassTag[T]])
-      hashEntry(blockId, entry, implicitly[ClassTag[T]])
       entries.synchronized {
         entries.put(blockId, entry)
       }
+      hashEntry(blockId, entry, implicitly[ClassTag[T]])
       logInfo("Block %s stored as bytes in memory (estimated size %s, free %s)".format(
         blockId, Utils.bytesToString(size), Utils.bytesToString(maxMemory - blocksMemoryUsed)))
       true
@@ -310,10 +345,10 @@ private[spark] class MemoryStore(
         }
       }
       if (enoughStorageMemory) {
-        hashEntry(blockId, entry, classTag)
         entries.synchronized {
           entries.put(blockId, entry)
         }
+        hashEntry(blockId, entry, classTag)
         logInfo("Block %s stored as values in memory (estimated size %s, free %s)".format(
           blockId, Utils.bytesToString(size), Utils.bytesToString(maxMemory - blocksMemoryUsed)))
         Right(size)
@@ -434,10 +469,10 @@ private[spark] class MemoryStore(
         val success = memoryManager.acquireStorageMemory(blockId, entry.size, memoryMode)
         assert(success, "transferring unroll memory to storage memory failed")
       }
-      hashEntry(blockId, entry, classTag)
       entries.synchronized {
         entries.put(blockId, entry)
       }
+      hashEntry(blockId, entry, classTag)
       logInfo("Block %s stored as bytes in memory (estimated size %s, free %s)".format(
         blockId, Utils.bytesToString(entry.size),
         Utils.bytesToString(maxMemory - blocksMemoryUsed)))

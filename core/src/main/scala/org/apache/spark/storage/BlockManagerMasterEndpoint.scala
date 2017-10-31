@@ -130,8 +130,8 @@ class BlockManagerMasterEndpoint(
       context.reply(RegisteredRemoteBlockManagerMaster(self))
 
     case _updateBlockInfo @
-        UpdateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size) =>
-      context.reply(updateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size))
+        UpdateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size, hash, hash_took) =>
+      context.reply(updateBlockInfo(blockManagerId, blockId, storageLevel, deserializedSize, size, hash, hash_took))
       listenerBus.post(SparkListenerBlockUpdated(BlockUpdatedInfo(_updateBlockInfo)))
 
     case GetLocations(blockId, remote) =>
@@ -454,7 +454,9 @@ class BlockManagerMasterEndpoint(
       blockId: BlockId,
       storageLevel: StorageLevel,
       memSize: Long,
-      diskSize: Long): Boolean = {
+      diskSize: Long,
+      hash: String,
+      hash_took: Long): Boolean = {
 
     if (!blockManagerInfo.contains(blockManagerId)) {
       if (blockManagerId.isDriver && !isLocal) {
@@ -471,7 +473,7 @@ class BlockManagerMasterEndpoint(
       return true
     }
 
-    blockManagerInfo(blockManagerId).updateBlockInfo(blockId, storageLevel, memSize, diskSize)
+    blockManagerInfo(blockManagerId).updateBlockInfo(blockId, storageLevel, memSize, diskSize, hash, hash_took)
 
     var locations: mutable.HashSet[BlockManagerId] = null
     if (blockLocations.containsKey(blockId)) {
@@ -640,13 +642,13 @@ class BlockManagerMasterEndpoint(
 }
 
 @DeveloperApi
-case class BlockStatus(storageLevel: StorageLevel, memSize: Long, diskSize: Long) {
+case class BlockStatus(storageLevel: StorageLevel, memSize: Long, diskSize: Long, hash: String = "", hash_took: Long = 0L) {
   def isCached: Boolean = memSize + diskSize > 0
 }
 
 @DeveloperApi
 object BlockStatus {
-  def empty: BlockStatus = BlockStatus(StorageLevel.NONE, memSize = 0L, diskSize = 0L)
+  def empty: BlockStatus = BlockStatus(StorageLevel.NONE, memSize = 0L, diskSize = 0L, hash = "", hash_took = 0)
 }
 
 private[spark] class BlockManagerInfo(
@@ -678,7 +680,9 @@ private[spark] class BlockManagerInfo(
       blockId: BlockId,
       storageLevel: StorageLevel,
       memSize: Long,
-      diskSize: Long) {
+      diskSize: Long,
+      hash: String,
+      hash_took: Long) {
 
     updateLastSeenMs()
 
@@ -708,30 +712,34 @@ private[spark] class BlockManagerInfo(
        * Therefore, a safe way to set BlockStatus is to set its info in accurate modes. */
       var blockStatus: BlockStatus = null
       if (storageLevel.useMemory) {
-        blockStatus = BlockStatus(storageLevel, memSize = memSize, diskSize = 0)
+        blockStatus = BlockStatus(storageLevel, memSize = memSize, diskSize = 0, hash = hash, hash_took = hash_took)
         _blocks.put(blockId, blockStatus)
         _remainingMem -= memSize
         if (blockExists) {
           logInfo(s"Updated $blockId in memory on ${blockManagerId.hostPort}" +
             s" (current size: ${Utils.bytesToString(memSize)}," +
             s" original size: ${Utils.bytesToString(originalMemSize)}," +
-            s" free: ${Utils.bytesToString(_remainingMem)})")
+            s" free: ${Utils.bytesToString(_remainingMem)}," +
+            s" hash: ${hash} hash_took: ${hash_took})")
         } else {
           logInfo(s"Added $blockId in memory on ${blockManagerId.hostPort}" +
             s" (size: ${Utils.bytesToString(memSize)}," +
-            s" free: ${Utils.bytesToString(_remainingMem)})")
+            s" free: ${Utils.bytesToString(_remainingMem)})" +
+            s" hash: ${hash} hash_took: ${hash_took})")
         }
       }
       if (storageLevel.useDisk) {
-        blockStatus = BlockStatus(storageLevel, memSize = 0, diskSize = diskSize)
+        blockStatus = BlockStatus(storageLevel, memSize = 0, diskSize = diskSize, hash = hash, hash_took = hash_took)
         _blocks.put(blockId, blockStatus)
         if (blockExists) {
           logInfo(s"Updated $blockId on disk on ${blockManagerId.hostPort}" +
             s" (current size: ${Utils.bytesToString(diskSize)}," +
-            s" original size: ${Utils.bytesToString(originalDiskSize)})")
+            s" original size: ${Utils.bytesToString(originalDiskSize)}," + 
+            s" hash: ${hash})")
         } else {
           logInfo(s"Added $blockId on disk on ${blockManagerId.hostPort}" +
-            s" (size: ${Utils.bytesToString(diskSize)})")
+            s" (size: ${Utils.bytesToString(diskSize)}," +
+            s" hash: ${hash})")
         }
       }
       if (!blockId.isBroadcast && blockStatus.isCached) {

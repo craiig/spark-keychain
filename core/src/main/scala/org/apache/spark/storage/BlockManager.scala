@@ -383,9 +383,12 @@ private[spark] class BlockManager(
    */
   def getStatus(blockId: BlockId): Option[BlockStatus] = {
     blockInfoManager.get(blockId).map { info =>
-      val memSize = if (memoryStore.contains(blockId)) memoryStore.getSize(blockId) else 0L
+      val inMem = memoryStore.contains(blockId)
+      val memSize = if (inMem) memoryStore.getSize(blockId) else 0L
       val diskSize = if (diskStore.contains(blockId)) diskStore.getSize(blockId) else 0L
-      BlockStatus(info.level, memSize = memSize, diskSize = diskSize)
+      val blockHash = if (inMem) memoryStore.getHash(blockId)  else "" 
+      val blockHashTime = if (inMem) memoryStore.getHashTook(blockId)  else 0L
+      BlockStatus(info.level, memSize = memSize, diskSize = diskSize, hash=blockHash, hash_took=blockHashTime)
     }
   }
 
@@ -437,7 +440,9 @@ private[spark] class BlockManager(
     val storageLevel = status.storageLevel
     val inMemSize = Math.max(status.memSize, droppedMemorySize)
     val onDiskSize = status.diskSize
-    master.updateBlockInfo(blockManagerId, blockId, storageLevel, inMemSize, onDiskSize)
+    val hash = status.hash
+    val hash_took = status.hash_took
+    master.updateBlockInfo(blockManagerId, blockId, storageLevel, inMemSize, onDiskSize, hash, hash_took)
   }
 
   /**
@@ -463,7 +468,9 @@ private[spark] class BlockManager(
             replication = replication)
           val memSize = if (inMem) memoryStore.getSize(blockId) else 0L
           val diskSize = if (onDisk) diskStore.getSize(blockId) else 0L
-          BlockStatus(storageLevel, memSize, diskSize)
+          val blockHash = if (inMem) memoryStore.getHash(blockId)  else "" 
+          val blockHashTime = if (inMem) memoryStore.getHashTook(blockId)  else 0L
+          BlockStatus(storageLevel, memSize, diskSize, blockHash, blockHashTime)
       }
     }
   }

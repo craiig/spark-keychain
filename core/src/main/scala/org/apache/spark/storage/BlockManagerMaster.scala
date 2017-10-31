@@ -96,9 +96,11 @@ class BlockManagerMaster(
       blockId: BlockId,
       storageLevel: StorageLevel,
       memSize: Long,
-      diskSize: Long): Boolean = {
+      diskSize: Long,
+      hash: String,
+      hash_took: Long): Boolean = {
     val res = driverEndpoint.askSync[Boolean](
-      UpdateBlockInfo(blockManagerId, blockId, storageLevel, memSize, diskSize))
+      UpdateBlockInfo(blockManagerId, blockId, storageLevel, memSize, diskSize, hash, hash_took))
     logDebug(s"Updated info of block $blockId")
     res
   }

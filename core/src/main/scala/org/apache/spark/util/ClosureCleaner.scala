@@ -585,7 +585,7 @@ private[spark] object ClosureCleaner extends Logging {
     }
   }
   def hash_internal(func: AnyRef): Option[String] = {
-    var hashStart = System.currentTimeMillis
+    var hashStart = System.nanoTime
 
     if (!isClosure(func.getClass)) {
       logInfo("Expected a closure; got " + func.getClass.getName)
@@ -639,7 +639,7 @@ private[spark] object ClosureCleaner extends Logging {
           digest
       }
     }
-    var hashBytecodeStop = System.currentTimeMillis
+    var hashBytecodeStop = System.nanoTime
 
     // Now we want to serialize & hash any referenced fields
     /* disable serialization hashing for now */
@@ -652,7 +652,7 @@ private[spark] object ClosureCleaner extends Logging {
     */
 
     //hash the primitives
-    var hashPrimitivesStart = System.currentTimeMillis
+    var hashPrimitivesStart = System.nanoTime
     val bos = new ByteArrayOutputStream()
     val dos = new DataOutputStream(bos)
     logTrace("Hash input primitives start for: " + func.getClass.getName)
@@ -679,26 +679,26 @@ private[spark] object ClosureCleaner extends Logging {
     var merged = s"bc:${hashbytesenc}_pr:${primitive_hash64}"
     logInfo(s"Merged hash: ${merged}")
 
-    var hashStop = System.currentTimeMillis
-    logInfo(s"Hashing took: ${hashStop - hashStart} ms closure:${func.getClass.getName}")
-    logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ms closure:${func.getClass.getName}")
-    logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ms closure:${func.getClass.getName}")
+    var hashStop = System.nanoTime
+    logInfo(s"Hashing took: ${hashStop - hashStart} ns closure:${func.getClass.getName}")
+    logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ns closure:${func.getClass.getName}")
+    logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ns closure:${func.getClass.getName}")
 
     var overallHashTrace = Map(
       "closureName" -> func.getClass.getName,
       "bytecode"-> Map(
         "trace"->bytecodeHashTraces,
         "hash"->hashbytesenc,
-        "took_ms"->(hashBytecodeStop - hashStart)
+        "took_ns"->(hashBytecodeStop - hashStart)
       ),
       "primitives"-> Map(
         "trace"->primitiveHashTrace,
         "hash"->primitive_hash64,
         "hashed_bytes"->bos.toByteArray.mkString(","),
-        "took_ms"->(hashStop - hashPrimitivesStart)
+        "took_ns"->(hashStop - hashPrimitivesStart)
       ),
       "mergedHash"->merged,
-      "took_ms"->(hashStop - hashStart)
+      "took_ns"->(hashStop - hashStart)
     )
 
     implicit val jsonformats = Serialization.formats(NoTypeHints)
