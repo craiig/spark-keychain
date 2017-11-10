@@ -251,7 +251,8 @@ private[spark] object ClosureCleaner extends Logging {
        override def visitLocalVariable(name:String, desc:String,
          signature:String, start:Label, end:Label, index:Int){
            var newdesc = re_outer(re_name(desc))
-           super.visitLocalVariable(name, newdesc, signature,
+           /* emit a new name to avoid issues with changes in variable names */
+           super.visitLocalVariable(s"localvar${index}", newdesc, signature,
              start, end, index)
        }
        /* deprecated by ASM5, kept here to ensure renaming works */
