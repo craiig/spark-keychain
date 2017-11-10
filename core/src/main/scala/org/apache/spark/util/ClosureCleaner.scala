@@ -317,7 +317,7 @@ private[spark] object ClosureCleaner extends Logging {
            var s = o.toString()
            bytecode_string.append(s)
            hashObj.update(s.getBytes)
-           localHash.update(methodHeader.getBytes)
+           localHash.update(s.getBytes)
          }
          p.getText.clear
        }
