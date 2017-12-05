@@ -214,13 +214,14 @@ private[spark] object ClosureCleaner extends Logging {
       * make sure to rewrite any non-identifying symbols that could cause
       * differences in the hash but aren't functionally relevant, such as:
       *  - Scala REPL adds 'lineXX' package for each lambda
-      * for now we only want to support very simple lambdas, so we only rewrite
-      * references to their current package to a non-REPL form, but keep any references
-      * to other potentially REPL functions, but we also want to avoid ambiguity
+      *  - class self-references and references to it's outer class
       */
-
-     //create a regex that replaces the original name with the munged
      val re_line = (s:String) => {
+       /* this transformation ensures that any classes that reference a scala
+        * REPL line number are modified to remove the line number 
+        * this should be applied last because it may disrupt other (more
+        * important) transformations
+        */
        if(anonymizeClass){
          val quoted_name = "\\$line\\d+".r
          var ret = quoted_name.replaceAllIn(s, "\\$lineXX")
@@ -230,17 +231,25 @@ private[spark] object ClosureCleaner extends Logging {
        }
      }
      val re_name = (s:String) => {
+       /* this transformation ensures that when a class references itself, it
+        * uses a relative name. this avoids problems where similar funcions are
+        * written in different contexts, and thus their names are different but
+        * functionality is equivalent.
+        */
        if(anonymizeClass && cn.name != null){
          val quoted_name = Pattern.quote(cn.name).r
-         quoted_name.replaceAllIn(re_line(s), "THISCLASS")
+         re_line(quoted_name.replaceAllIn(s, "THISCLASS"))
        } else {
          s
        }
      }
      val re_outer = (s:String) => {
+       /* this transformation turns an absolute reference to an outer class
+        * into a relative reference
+        */
        if(anonymizeClass && cn.outerClass != null){
          val quoted_outer = Pattern.quote(cn.outerClass).r
-         quoted_outer.replaceAllIn(re_line(s), "THISOUTER")
+         re_line(quoted_outer.replaceAllIn(s, "THISOUTER"))
        } else {
          s
        }
@@ -572,6 +581,10 @@ private[spark] object ClosureCleaner extends Logging {
   val preferredHashType = "SHA-256"
   var hashCache: Map[String, Array[Byte]] = Map.empty
   def hash(func: AnyRef): Option[String] = {
+    /* ignore the hash trace return, if present */
+    hashWithTrace(func).map( (x) => {x._1} )
+  }
+  def hashWithTrace(func: AnyRef): Option[(String, HashTraceMap)] = {
     try {
       hash_internal(func)
     } catch {
@@ -585,7 +598,8 @@ private[spark] object ClosureCleaner extends Logging {
       }
     }
   }
-  def hash_internal(func: AnyRef): Option[String] = {
+  /* Internal hash method that returns a trace */
+  def hash_internal(func: AnyRef): Option[(String,HashTraceMap)] = {
     var hashStart = System.nanoTime
 
     if (!isClosure(func.getClass)) {
@@ -685,7 +699,7 @@ private[spark] object ClosureCleaner extends Logging {
     logInfo(s"Hashing Bytecode took: ${hashBytecodeStop - hashStart} ns closure:${func.getClass.getName}")
     logInfo(s"Hashing Primitives took: ${hashStop - hashPrimitivesStart} ns closure:${func.getClass.getName}")
 
-    var overallHashTrace = Map(
+    var overallHashTrace = HashMap(
       "closureName" -> func.getClass.getName,
       "bytecode"-> Map(
         "trace"->bytecodeHashTraces,
@@ -705,7 +719,7 @@ private[spark] object ClosureCleaner extends Logging {
     implicit val jsonformats = Serialization.formats(NoTypeHints)
     logInfo(s"Hashing trace: ${WriteJson(overallHashTrace)}")
 
-    Some(merged)
+    Some((merged, overallHashTrace))
   }
 
   /**
