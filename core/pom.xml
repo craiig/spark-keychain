@@ -63,10 +63,9 @@
       <groupId>org.apache.xbean</groupId>
       <artifactId>xbean-asm5-shaded</artifactId>
     </dependency>
-	<!-- this asm is required to support the full ASM5 features needed for bytecode hashing -->
     <dependency>
-      <groupId>org.ow2.asm</groupId>
-      <artifactId>asm-util</artifactId>
+      <groupId>ca.ubc.ece.systems</groupId>
+      <artifactId>udf-hash</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>

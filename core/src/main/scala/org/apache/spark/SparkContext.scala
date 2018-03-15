@@ -2363,7 +2363,7 @@ class SparkContext(config: SparkConf) extends Logging {
     f
   }
 
-  private[spark] def hash[F <: AnyRef](f: F): Option[String] = {
+  def hash[F <: AnyRef](f: F): Option[String] = {
     ClosureCleaner.hash(f)
   }
 

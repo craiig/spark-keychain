@@ -310,12 +310,10 @@
         <artifactId>xbean-asm5-shaded</artifactId>
         <version>4.4</version>
       </dependency>
-	  <!-- This is similar to the above ASM shaded, but includes all ASM features, which is needed
-		   for the Spark lambda hashing feature -->
-      <dependency>
-        <groupId>org.ow2.asm</groupId>
-        <artifactId>asm-util</artifactId>
-        <version>5.0.4</version>
+	  <dependency>
+        <groupId>ca.ubc.ece.systems</groupId>
+        <artifactId>udf-hash</artifactId>
+        <version>1.0-SNAPSHOT</version>
       </dependency>
 
       <!-- Shaded deps marked as provided. These are promoted to compile scope
