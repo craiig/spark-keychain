@@ -22,6 +22,7 @@ import java.io.{FileNotFoundException, IOException}
 import scala.collection.mutable
 
 import org.apache.spark.{Partition => RDDPartition, TaskContext, TaskKilledException}
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.{InputFileBlockHolder, RDD}
 import org.apache.spark.sql.SparkSession
@@ -54,7 +55,23 @@ case class PartitionedFile(
  * A collection of file blocks that should be read as a single task
  * (possibly from multiple partitioned directories).
  */
-case class FilePartition(index: Int, files: Seq[PartitionedFile]) extends RDDPartition
+//case class FilePartition(index: Int, files: Seq[PartitionedFile]) extends RDDPartition
+class FilePartition(val index:Int, val files: Seq[PartitionedFile]) extends RDDPartition {
+    blockId= {
+      Some(RDDUniqueBlockId(s"filescan {idx:${index}, files:${files.mkString(",")} }"))
+    }
+}
+/* fake out the case class that we replaced
+ * see: https://www.scala-exercises.org/scala_tutorial/classes_vs_case_classes */
+object FilePartition {
+  def apply(index:Int, files: Seq[PartitionedFile]): FilePartition = {
+    new FilePartition(index, files)
+  }
+  def unapply(fp: FilePartition): Option[(Int, Seq[PartitionedFile])] = {
+    if( fp eq null) None
+    else Some((fp.index, fp.files))
+  }
+}
 
 /**
  * An RDD that scans a list of file partitions.
