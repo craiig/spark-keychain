@@ -820,10 +820,11 @@ abstract class RDD[T: ClassTag](
   private[spark] def mapPartitionsWithIndexInternal[U: ClassTag](
       f: (Int, Iterator[T]) => Iterator[U],
       preservesPartitioning: Boolean = false): RDD[U] = withScope {
+    var hash = sc.hash(f)
     new MapPartitionsRDD(
       this,
       (context: TaskContext, index: Int, iter: Iterator[T]) => f(index, iter),
-      preservesPartitioning)
+      preservesPartitioning, hash)
   }
 
   /**

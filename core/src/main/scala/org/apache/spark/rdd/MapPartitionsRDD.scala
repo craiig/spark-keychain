@@ -24,6 +24,7 @@ import org.apache.spark.{Partition, TaskContext, SparkContext}
 import org.apache.commons.codec.binary.Base64
 import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
 import org.apache.spark.internal.Logging
+import java.lang.Thread
 
 private[spark] class MapPartition(@transient val rdd: RDD[_], val prev: Partition, val funcStr:Option[String])
   extends Partition with Logging {
@@ -73,6 +74,8 @@ private[spark] class MapPartitionsRDD[U: ClassTag, T: ClassTag](
   val f_hash:Option[String] = if(!lambdaHash.isEmpty && !f_outerHash.isEmpty){
     Some(s"inner_${lambdaHash.get}_outer_${f_outerHash.get}")
   } else {
+    //val t = Thread.currentThread().getStackTrace()
+    //logInfo(s"Map without hashes: inner: ${lambdaHash.getOrElse("")} outer: ${f_outerHash.getOrElse("")} trace: ${t.mkString("--")}")
     None
   }
 
