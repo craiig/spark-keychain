@@ -92,6 +92,9 @@ private[spark] class TorrentBroadcast[T: ClassTag](obj: T, id: Long)
   /** The checksum for all the blocks. */
   private var checksums: Array[Int] = _
 
+  /** used to uniquely identify each broadcast **/
+  private val hls_hash:String = SparkContext.getOrCreate().hashValue(value).getOrElse("")
+
   override protected def getValue() = {
     _value
   }
@@ -136,6 +139,14 @@ private[spark] class TorrentBroadcast[T: ClassTag](obj: T, id: Long)
       if (!blockManager.putBytes(pieceId, bytes, MEMORY_AND_DISK_SER, tellMaster = true)) {
         throw new SparkException(s"Failed to store $pieceId of $broadcastId in local BlockManager")
       }
+    }
+
+    logInfo(s"HLS Broadcast $broadcastId = $hls_hash")
+    //logInfo(s"HLS Broadcast called at: ${Thread.currentThread().getStackTrace().mkString("--")}")
+    if(checksumEnabled){
+      logInfo(s"wrote $broadcastId with checksums: ${checksums.mkString(",")}")
+    } else {
+      logInfo(s"wrote $broadcastId without checksums")
     }
     blocks.length
   }

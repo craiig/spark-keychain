@@ -19,15 +19,18 @@ package org.apache.spark.util
 import java.io.{ObjectInputStream, ObjectOutputStream}
 
 import org.apache.hadoop.conf.Configuration
+import org.apache.spark.util.ClosureCleaner
 
 private[spark]
 class SerializableConfiguration(@transient var value: Configuration) extends Serializable {
+  var hls_value:String = ClosureCleaner.hashValue(value).getOrElse("none") /* used to hold the preserialized value */
   private def writeObject(out: ObjectOutputStream): Unit = Utils.tryOrIOException {
     out.defaultWriteObject()
     value.write(out)
   }
 
   private def readObject(in: ObjectInputStream): Unit = Utils.tryOrIOException {
+    in.defaultReadObject()
     value = new Configuration(false)
     value.readFields(in)
   }

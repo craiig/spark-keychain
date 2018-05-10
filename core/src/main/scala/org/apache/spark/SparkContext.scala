@@ -2366,6 +2366,9 @@ class SparkContext(config: SparkConf) extends Logging {
   def hash[F <: AnyRef](f: F): Option[String] = {
     ClosureCleaner.hash(f)
   }
+  def hashValue[V <: Any](v: V): Option[String] = {
+    ClosureCleaner.hashValue(v)
+  }
 
   /**
    * Set the directory under which RDDs are going to be checkpointed.
