@@ -117,7 +117,7 @@ private[spark] object ClosureCleaner extends Logging {
     ClosureHash.hash(func)
   }
   def hashValue(value: Any): Option[String] = {
-    ClosureHash.hashValue(value, true)
+    ClosureHash.hashValue(value)
   }
 
   /**
