@@ -22,6 +22,8 @@ import java.util.Arrays
 import org.apache.spark._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.storage.{BlockId, RDDBlockId, RDDUniqueBlockId}
+import org.apache.spark.internal.Logging
 
 /**
  * The [[Partition]] used by [[ShuffledRowRDD]]. A post-shuffle partition
@@ -29,11 +31,39 @@ import org.apache.spark.sql.catalyst.InternalRow
  * (`startPreShufflePartitionIndex` to `endPreShufflePartitionIndex - 1`, inclusive).
  */
 private final class ShuffledRowRDDPartition(
-    val rdd: RDD[_],
+    @transient val rdd: RDD[_],
+    @transient var dependency: ShuffleDependency[Int, InternalRow, InternalRow],
     val postShufflePartitionIndex: Int,
     val startPreShufflePartitionIndex: Int,
-    val endPreShufflePartitionIndex: Int) extends Partition {
+    val endPreShufflePartitionIndex: Int) extends Partition with Logging {
   override val index: Int = postShufflePartitionIndex
+  blockId = {
+    val prev = dependency.rdd
+    val part = dependency.partitioner
+    if( prev.partitions.isEmpty ){
+      /* if there are no rdds from the previous partition (i.e. test suite
+       * sorts an empty rdd, just return the default */
+      Some(RDDBlockId(rdd.id, index))
+    } else {
+      val prevBlockID = prev.partitions(0).blockId;
+      /* need to know the name of the blocks we're supposed to read, we can avoid
+       * renaming all the internal shuffle blocks and just reference the blocks
+       * produced by the pre-shuffle map task
+       */
+      if( !prevBlockID.isEmpty && prevBlockID.get.isInstanceOf[RDDUniqueBlockId] ){
+        /* index is not encoded by prev because we are shuffling */
+        val part_name = s"${part.getClass.getName}:${part.hashCode}"
+        val str = s"ShuffledRowRDD{ part:${part_name}, post:$postShufflePartitionIndex, start:$startPreShufflePartitionIndex, end:$endPreShufflePartitionIndex, prev:${prevBlockID}}}"
+        Some(RDDUniqueBlockId(str))
+      } else {
+        logInfo(s"ShuffledRowRDD falling back to standard block id: "
+          + s"rdd parent: ${prev.getClass().getName()}"
+          + s" callsite: ${rdd.getCreationSite}"
+          )
+        Some(RDDBlockId(rdd.id, index))
+      }
+    }
+  }
 }
 
 /**
@@ -42,6 +72,7 @@ private final class ShuffledRowRDDPartition(
  */
 private class PartitionIdPassthrough(override val numPartitions: Int) extends Partitioner {
   override def getPartition(key: Any): Int = key.asInstanceOf[Int]
+  override def hashCode: Int = numPartitions /* to support hls of partitions */
 }
 
 /**
@@ -143,7 +174,7 @@ class ShuffledRowRDD(
         } else {
           numPreShufflePartitions
         }
-      new ShuffledRowRDDPartition(this, i, startIndex, endIndex)
+      new ShuffledRowRDDPartition(this, dependency, i, startIndex, endIndex)
     }
   }
 
