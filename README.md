@@ -1,3 +1,12 @@
+# KeyChain This is a modified version of Spark that implements KeyChain, that
+allows programs to share data betweeen each other by generating cache keys that
+are valid between programs.
+
+## Building
+* First, build and install the UDF hashing library on your machine, available at: https://github.com/craiig/keychain-tools/tree/master/udf-hash
+* Build Spark like normal! Watch the logs for messages about HLS traces (the
+  old name of KeyChain)
+
 # Apache Spark
 
 Spark is a fast and general cluster computing system for Big Data. It provides
